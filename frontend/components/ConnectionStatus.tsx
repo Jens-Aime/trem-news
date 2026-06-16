@@ -12,18 +12,13 @@ const STATUS_CONFIG: Record<
 > = {
   connected: {
     dot: "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.5)] animate-pulse",
-    label: "Connected (Live Sync)",
+    label: "Connected (Polling)",
     text: "text-emerald-400",
   },
   connecting: {
     dot: "bg-yellow-400 animate-pulse",
     label: "Connecting…",
     text: "text-yellow-400",
-  },
-  disconnected: {
-    dot: "bg-slate-500",
-    label: "Disconnected",
-    text: "text-slate-400",
   },
   error: {
     dot: "bg-red-500 animate-pulse",

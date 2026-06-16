@@ -98,20 +98,6 @@ export function formatEventDate(iso: string): string {
 
 // ── URL resolution (works in both SSR and browser) ───────────────────────────
 
-const WS_PATH = "/ws/market-pulse";
-
-/** Resolve the backend WebSocket URL at runtime. */
-export function resolveWsUrl(): string {
-  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
-  if (typeof window === "undefined") return `ws://localhost:8000${WS_PATH}`;
-  const { hostname, protocol } = window.location;
-  if (hostname === "localhost" || hostname === "127.0.0.1")
-    return `ws://localhost:8000${WS_PATH}`;
-  // Codespaces: replace embedded frontend port with backend port
-  const wsScheme = protocol === "https:" ? "wss:" : "ws:";
-  return `${wsScheme}//${hostname.replace(/-\d+\./, "-8000.")}${WS_PATH}`;
-}
-
 /** Resolve the backend HTTP base URL (no trailing slash) at runtime. */
 export function resolveApiBase(): string {
   if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;

@@ -3,12 +3,6 @@
 
 export type Sentiment = "bullish" | "bearish" | "neutral" | "mixed";
 export type RiskLevel = "low" | "medium" | "high" | "critical";
-export type WSMessageType =
-  | "connection_ack"
-  | "analysis_result"
-  | "heartbeat"
-  | "error"
-  | "disconnect";
 
 export interface AnalysisResult {
   event_id: string;
@@ -23,19 +17,7 @@ export interface AnalysisResult {
   analyzed_at: string;
 }
 
-export interface WSMessage {
-  type: WSMessageType;
-  timestamp: string;
-  data: AnalysisResult | null;
-  client_id: string | null;
-  message: string | null;
-}
-
-export type ConnectionStatus =
-  | "connecting"
-  | "connected"
-  | "disconnected"
-  | "error";
+export type ConnectionStatus = "connecting" | "connected" | "error";
 
 /** Superset of AnalysisResult — includes the underlying economic event fields. */
 export interface HistoryEntry extends AnalysisResult {
