@@ -1,9 +1,8 @@
-from functools import lru_cache
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.core.ai_orchestrator import AIAnalysisError, AIOrchestrator
+from app.core.ai_orchestrator import AIAnalysisError, AIOrchestrator, get_ai_orchestrator
 from app.core.websocket_manager import (
     ConnectionManager,
     WSMessage,
@@ -14,13 +13,10 @@ from app.models import AnalysisResult, ProcessedEvent
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
+# Canonical alias so existing test fixtures that import _get_orchestrator still work
+_get_orchestrator = get_ai_orchestrator
 
-@lru_cache(maxsize=1)
-def _get_orchestrator() -> AIOrchestrator:
-    return AIOrchestrator()
-
-
-OrchestratorDep = Annotated[AIOrchestrator, Depends(_get_orchestrator)]
+OrchestratorDep = Annotated[AIOrchestrator, Depends(get_ai_orchestrator)]
 ManagerDep = Annotated[ConnectionManager, Depends(get_connection_manager)]
 
 

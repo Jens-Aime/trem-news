@@ -33,6 +33,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any
 
 from cachetools import TTLCache
@@ -252,3 +253,17 @@ class AIOrchestrator:
         e = processed_event.event
         raw = f"{e.event_id}:{e.actual}:{e.forecast}:{e.impact_level.value}"
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Canonical singleton factory (used by routers AND the scheduler)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@lru_cache(maxsize=1)
+def get_ai_orchestrator() -> AIOrchestrator:
+    """
+    Return the process-wide AIOrchestrator singleton.
+
+    Override via app.dependency_overrides[get_ai_orchestrator] in tests.
+    """
+    return AIOrchestrator()

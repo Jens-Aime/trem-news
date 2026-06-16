@@ -1,34 +1,36 @@
 """
 Shared pytest fixtures for the Market Pulse Intelligence test suite.
 
-WebSocket test isolation
-────────────────────────
-FastAPI's app.dependency_overrides is used to inject a fresh ConnectionManager
-per test. Without this, the lru_cache singleton would leak connection state
-across tests (e.g., a WS connected in test A appearing in test B's broadcast).
+WebSocket + Lifespan isolation
+──────────────────────────────
+FastAPI's app.dependency_overrides injects fresh instances of:
+  • ConnectionManager  — prevents WS state leaking across tests
+  • AIOrchestrator     — prevents real AI calls; returns MOCK_ANALYSIS
 
-Usage in test files:
-    def test_something(ws_test_client):
-        client, manager = ws_test_client
-        with client.websocket_connect("/ws/market-pulse") as ws:
-            ...
+The lifespan (main.py) creates an EventScheduler but ONLY starts it when
+FINNHUB_API_KEY is set.  In the test environment the key is always empty,
+so the scheduler is dormant and does not interfere with any test.
 """
 
-import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from starlette.testclient import TestClient
 
-from app.api.analysis_router import _get_orchestrator
+# Canonical override key — imported from the module that owns get_ai_orchestrator
+from app.core.ai_orchestrator import get_ai_orchestrator
 from app.core.websocket_manager import ConnectionManager, get_connection_manager
 from app.main import app
 from app.models import AnalysisResult, RiskLevel, Sentiment
 
+# Backward-compatible alias so any existing test that imports _get_orchestrator
+# from conftest still resolves to the right override key.
+_get_orchestrator = get_ai_orchestrator
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Canonical mock AnalysisResult (reused across WS + analysis tests)
+# Canonical mock AnalysisResult (reused across WS + analysis + scheduler tests)
 # ─────────────────────────────────────────────────────────────────────────────
 
 MOCK_ANALYSIS = AnalysisResult(
@@ -64,16 +66,15 @@ def _make_mock_orchestrator(result: AnalysisResult = MOCK_ANALYSIS) -> MagicMock
 @pytest.fixture
 def ws_test_client():
     """
-    Yield (TestClient, ConnectionManager) with dependency overrides in effect.
-
-    Both the WebSocket router and the analysis router will share the same fresh
-    ConnectionManager — necessary for the broadcast integration tests.
+    Yield (TestClient, ConnectionManager, mock_orchestrator) with dependency
+    overrides active.  Both the WS router and the analysis router share the
+    same fresh ConnectionManager, which is required for the broadcast tests.
     """
     manager = ConnectionManager()
     mock_orch = _make_mock_orchestrator()
 
     app.dependency_overrides[get_connection_manager] = lambda: manager
-    app.dependency_overrides[_get_orchestrator] = lambda: mock_orch
+    app.dependency_overrides[get_ai_orchestrator] = lambda: mock_orch
 
     with TestClient(app) as client:
         yield client, manager, mock_orch
@@ -84,8 +85,8 @@ def ws_test_client():
 @pytest.fixture
 def ws_test_client_no_orch_override():
     """
-    TestClient with only the manager overridden (orchestrator stays mocked at
-    the class level by the caller). Used for tests that need a custom orchestrator.
+    TestClient with only the manager overridden.
+    Caller is responsible for mocking the orchestrator independently.
     """
     manager = ConnectionManager()
     app.dependency_overrides[get_connection_manager] = lambda: manager

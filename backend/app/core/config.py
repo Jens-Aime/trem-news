@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     ai_cache_ttl_seconds: int = 3600   # 1 hour
     ai_cache_max_size: int = 512
 
+    # Autonomous event scheduler
+    scheduler_enabled: bool = True
+    scheduler_poll_interval: int = 60       # seconds between Finnhub polls
+    scheduler_seen_ttl: int = 86_400        # 24 h — how long to remember event IDs
+    scheduler_seen_max: int = 5_000         # max tracked IDs in memory
+
 
 @lru_cache
 def get_settings() -> Settings:
