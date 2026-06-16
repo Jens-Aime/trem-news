@@ -11,11 +11,39 @@ import type {
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-const DEFAULT_WS_URL =
-  process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000/ws/market-pulse";
-
+const WS_PATH = "/ws/market-pulse";
 const MAX_EVENTS = 50;         // cap the in-memory feed length
 const MAX_RECONNECT_ATTEMPTS = 10;
+
+/**
+ * Compute the WebSocket URL at runtime so it works both in local dev and in
+ * proxied environments (e.g. GitHub Codespaces) where the port is embedded in
+ * the hostname as "…-{port}.{domain}".
+ *
+ * Priority:
+ *   1. localhost            → ws://localhost:8000/ws/market-pulse
+ *   2. Proxy/tunnel host    → replace the embedded frontend port with 8000, use wss://
+ *
+ * Only called from inside connect(), which is triggered by useEffect — so
+ * window is always defined at call-time.
+ */
+function resolveWsUrl(): string {
+  if (typeof window === "undefined") {
+    return `ws://localhost:8000${WS_PATH}`;
+  }
+
+  const { hostname, protocol } = window.location;
+
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return `ws://localhost:8000${WS_PATH}`;
+  }
+
+  // Codespaces / any tunnel that embeds the port as "-PORT." in the hostname
+  // e.g. "myapp-3000.app.github.dev" → "myapp-8000.app.github.dev"
+  const wsScheme = protocol === "https:" ? "wss:" : "ws:";
+  const backendHost = hostname.replace(/-\d+\./, "-8000.");
+  return `${wsScheme}//${backendHost}${WS_PATH}`;
+}
 
 /** Exponential backoff capped at 30 s: 1 s, 2 s, 4 s, 8 s … 30 s */
 function backoffDelay(attempt: number): number {
@@ -44,7 +72,7 @@ export interface UseMarketPulseReturn {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function useMarketPulse({
-  url = DEFAULT_WS_URL,
+  url,
   maxReconnectAttempts = MAX_RECONNECT_ATTEMPTS,
 }: UseMarketPulseOptions = {}): UseMarketPulseReturn {
   const [events, setEvents] = useState<AnalysisResult[]>([]);
@@ -60,6 +88,10 @@ export function useMarketPulse({
   const connect = useCallback(() => {
     if (unmountedRef.current) return;
 
+    // Resolve URL here — runs only in the browser (inside useEffect), so
+    // window is always defined. Prop > env override > runtime detection.
+    const wsUrl = url ?? process.env.NEXT_PUBLIC_WS_URL ?? resolveWsUrl();
+
     // Clean up any existing socket before reconnecting
     if (wsRef.current) {
       wsRef.current.onclose = null; // prevent double reconnect
@@ -71,7 +103,7 @@ export function useMarketPulse({
 
     let ws: WebSocket;
     try {
-      ws = new WebSocket(url);
+      ws = new WebSocket(wsUrl);
     } catch {
       setStatus("error");
       return;
