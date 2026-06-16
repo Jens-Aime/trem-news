@@ -118,6 +118,8 @@ class AIOrchestrator:
     async def _call_provider(self, processed_event: ProcessedEvent) -> AnalysisResult:
         if self._settings.ai_provider == "anthropic":
             return await self._call_anthropic(processed_event)
+        if self._settings.ai_provider == "gemini":
+            return await self._call_gemini(processed_event)
         return await self._call_openai(processed_event)
 
     # ── Anthropic path ────────────────────────────────────────────────────────
@@ -182,6 +184,33 @@ class AIOrchestrator:
 
         raw = response.choices[0].message.content or ""
         return self._parse_and_validate(raw, model, processed_event.event.event_id)
+
+    # ── Gemini path ───────────────────────────────────────────────────────────
+
+    async def _call_gemini(self, processed_event: ProcessedEvent) -> AnalysisResult:
+        try:
+            import google.generativeai as genai
+        except ImportError as exc:
+            raise AIAnalysisError(
+                "google-generativeai package not installed. Run: pip install google-generativeai"
+            ) from exc
+
+        genai.configure(api_key=self._settings.gemini_api_key)
+        model_name = self._settings.gemini_model
+
+        logger.info(
+            "Calling Gemini (%s) for event %s", model_name, processed_event.event.event_id
+        )
+
+        model = genai.GenerativeModel(
+            model_name=model_name,
+            generation_config={"response_mime_type": "application/json"},
+            system_instruction=SYSTEM_PROMPT,
+        )
+
+        response = await model.generate_content_async(build_user_prompt(processed_event))
+        raw = response.text
+        return self._parse_and_validate(raw, model_name, processed_event.event.event_id)
 
     # ── Parsing + validation ──────────────────────────────────────────────────
 

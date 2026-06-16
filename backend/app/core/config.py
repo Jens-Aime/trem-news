@@ -19,13 +19,15 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = 10
     max_retries: int = 3
 
-    # AI Provider  ("anthropic" | "openai")
-    ai_provider: Literal["anthropic", "openai"] = "anthropic"
+    # AI Provider  ("anthropic" | "openai" | "gemini")
+    ai_provider: Literal["anthropic", "openai", "gemini"] = "gemini"
     anthropic_api_key: str = ""
     openai_api_key: str = ""
+    gemini_api_key: str = ""
     # Default models — overridable via env
     anthropic_model: str = "claude-sonnet-4-6"
     openai_model: str = "gpt-4o"
+    gemini_model: str = "gemini-1.5-flash"
     ai_max_tokens: int = 1024
 
     # Analysis cache
