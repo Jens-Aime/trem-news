@@ -8,15 +8,13 @@ import { HistoricalView } from "@/components/HistoricalView";
 import { useMarketPulse } from "@/hooks/useMarketPulse";
 
 export function Dashboard() {
-  const { events, status, clientId, reconnectAttempt, clearEvents, mode } =
-    useMarketPulse();
+  const { events, status, clearEvents } = useMarketPulse();
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       {/* ── Top bar ─────────────────────────────────────────────── */}
       <header className="sticky top-0 z-10 border-b border-slate-800 bg-slate-950/90 backdrop-blur-sm">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
-          {/* Brand */}
           <div className="flex items-center gap-2">
             <Activity className="h-5 w-5 text-indigo-400" />
             <span className="font-semibold tracking-tight text-white">
@@ -25,27 +23,16 @@ export function Dashboard() {
             </span>
           </div>
 
-          {/* Connection badge */}
-          <ConnectionStatusBadge
-            status={status}
-            clientId={clientId}
-            reconnectAttempt={reconnectAttempt}
-            mode={mode}
-          />
+          <ConnectionStatusBadge status={status} />
         </div>
       </header>
 
       {/* ── Main content ────────────────────────────────────────── */}
       <main className="mx-auto max-w-7xl px-4 py-6">
-        {/* Stats bar — full width */}
         <StatsBar events={events} />
 
-        {/* Two-column grid: live feed | historical */}
         <div className="mt-4 grid grid-cols-1 gap-6 xl:grid-cols-2">
-          {/* Left: Live feed */}
           <LiveFeed events={events} onClear={clearEvents} />
-
-          {/* Right: Historical analysis */}
           <HistoricalView />
         </div>
       </main>
