@@ -36,6 +36,13 @@ class AnalysisResult(BaseModel):
     key_levels: Optional[dict[str, float]] = Field(
         None, description="Optional price / rate levels to watch (e.g. {'DXY': 104.5})"
     )
+    scenario_matrix: Optional[list[dict]] = Field(
+        None,
+        description=(
+            "Five-scenario outlook matrix for high-impact events. "
+            "Ordered hawkish→dovish. Each entry: label, trigger, market_reaction, rationale."
+        ),
+    )
 
     # Metadata — populated by orchestrator, not by the LLM
     model_used: str = ""

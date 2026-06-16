@@ -152,16 +152,22 @@ st.markdown("""
 }
 .date-grp:first-of-type { border-top: none; margin-top: 0; }
 
-/* ── Scenario analysis ── */
-.sc-beat   { border-left: 2px solid #22c55e; padding-left: 11px; }
-.sc-miss   { border-left: 2px solid #ef4444; padding-left: 11px; }
-.sc-inline { border-left: 2px solid #374151; padding-left: 11px; }
-.sc-lbl    { font-size: .6rem; font-weight: 700; letter-spacing: .12em;
-             text-transform: uppercase; margin-bottom: 6px; }
-.lbl-b  { color: #22c55e; }
-.lbl-m  { color: #ef4444; }
-.lbl-i  { color: #6b7280; }
-.sc-txt { font-size: .76rem; color: #94a3b8; line-height: 1.6; }
+/* ── Scenario matrix table ── */
+.sc-tbl { width: 100%; border-collapse: collapse; }
+.sc-tbl th {
+    text-align: left; padding: 6px 8px;
+    font-size: .58rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+    color: #334155; border-bottom: 1px solid #1e293b;
+}
+.sc-tbl td { padding: 8px 8px; vertical-align: top; line-height: 1.55; border-bottom: 1px solid #0f172a; }
+.sc-tbl td:first-child { padding-left: 12px; }
+.sc-cell-label { font-size: .7rem; font-weight: 700; }
+.sc-cell-trigger  { font-size: .73rem; color: #94a3b8; }
+.sc-cell-reaction { font-size: .73rem; color: #cbd5e1; font-weight: 500; }
+.sc-cell-rationale { font-size: .71rem; color: #64748b; }
+.sc-hdr-lbl { font-size: .58rem; font-weight: 700; letter-spacing: .12em;
+              text-transform: uppercase; color: #334155;
+              padding: 8px 0 5px; margin-bottom: 4px; }
 
 /* ── Page header ── */
 .pg-header {
@@ -390,71 +396,311 @@ def _vol_status(df: pd.DataFrame) -> tuple[str, str]:
     return "elevated", "ELEVATED VOLATILITY"
 
 
-# ── Scenario analysis engine ──────────────────────────────────────────────────
+# ── Scenario matrix engine ────────────────────────────────────────────────────
+# Five scenarios per event type, ordered hawkish → dovish.
+# Fields: label | trigger | market_reaction | rationale
+# Prohibited: buy / sell / long / short / enter / exit / recommend.
 
-def _scenarios(name: str, ccy: str) -> dict[str, str]:
+_SC_LABELS = [
+    "Extreme Hawkish Surprise",
+    "Hawkish / Slight Beat",
+    "Consensus / In-Line",
+    "Dovish / Slight Miss",
+    "Extreme Dovish Surprise",
+]
+
+def _scenario_matrix(name: str, ccy: str) -> list[dict]:
+    """Return a 5-scenario matrix for the given event + currency."""
     n = name.lower()
 
+    # ── NFP / Payrolls ────────────────────────────────────────────────────────
     if any(k in n for k in ("nonfarm", "non-farm", "nfp", "payroll")):
-        return {
-            "beat":   f"Stronger-than-expected payrolls reduce recession risk and support {ccy} as labor market resilience sustains current rate expectations. USD-correlated assets may see upside pressure.",
-            "miss":   f"Weaker payrolls raise probability of Fed easing, pressuring {ccy} near-term. Risk assets may rally on lower-for-longer rate expectations; duration bonds likely to outperform.",
-            "inline": "In-line reading confirms trend continuation. Limited immediate market catalyst; attention shifts to the next high-impact release or Fed communication.",
-        }
-    if any(k in n for k in ("cpi", "consumer price", "price index", "inflation")):
-        return {
-            "beat":   f"Above-forecast inflation reinforces central bank hawkishness, supporting {ccy} through sustained rate expectations. Fixed income may come under renewed pressure.",
-            "miss":   f"Below-forecast CPI opens the door for earlier rate reductions, softening {ccy} near-term. Bond prices likely to rally; growth-sensitive equities may benefit.",
-            "inline": "Consensus print keeps policy trajectory unchanged. Limited repricing unless prior periods are revised materially upward.",
-        }
-    if any(k in n for k in ("gdp", "gross domestic")):
-        return {
-            "beat":   f"Growth beat strengthens the macro outlook for the {ccy} zone, potentially delaying rate cuts. Equity indices may rally; cyclicals and financials could outperform.",
-            "miss":   f"Growth miss raises stagflation or recession risk, pressuring {ccy}. Safe-haven flows may benefit CHF and JPY; commodity currencies at heightened risk.",
-            "inline": "GDP in line with consensus maintains status quo. Market focus shifts to forward guidance, revision components, and consumption sub-indices.",
-        }
-    if any(k in n for k in ("pce", "personal consumption", "personal spending")):
-        return {
-            "beat":   f"Strong PCE reinforces the Fed's cautious stance on rate reductions, underpinning {ccy}. Real yields may tick higher; growth stocks could see marginal pressure.",
-            "miss":   f"Soft PCE increases confidence in the disinflation path, raising rate-cut probability. Treasuries likely to rally; {ccy} may weaken modestly.",
-            "inline": "In-line PCE supports gradual normalization narrative. No immediate repricing catalyst absent material forward guidance shifts.",
-        }
-    if any(k in n for k in ("pmi", "purchasing managers", "ism manufacturing", "ism services", "ism non")):
-        return {
-            "beat":   f"Above-50 PMI beat signals expansion momentum, supporting risk appetite and {ccy}. Manufacturing or services sector equities may outperform.",
-            "miss":   f"Sub-50 PMI miss signals contraction risk, weakening {ccy} and broader risk sentiment. Defensive sectors and government bonds may attract flows.",
-            "inline": "PMI at consensus — expansion or contraction pace confirmed. Watch the 50 threshold as the decisive directional boundary.",
-        }
+        return [
+            {"label": _SC_LABELS[0],
+             "trigger": f"Print ≥ +100K above forecast (e.g. +350K vs +250K consensus)",
+             "market_reaction": f"{ccy} sharply higher across G10; US Treasury 2Y yield surges; equities retreat on rate concerns; gold under pressure",
+             "rationale": "A large beat compresses unemployment toward NAIRU, eliminating the precondition for rate cuts. Yield differential widens via uncovered interest-rate parity; carry inflows amplify the currency move."},
+            {"label": _SC_LABELS[1],
+             "trigger": "+25K to +100K above forecast",
+             "market_reaction": f"{ccy} modestly higher; 2Y–10Y spread compresses (flattening); equities mixed; rate-cut pricing pushed further out",
+             "rationale": "Moderate labor outperformance sustains the 'higher-for-longer' Fed narrative. Taylor Rule residuals remain positive, reducing near-term rate-cut probability without triggering a major repricing."},
+            {"label": _SC_LABELS[2],
+             "trigger": "Print within ±25K of forecast",
+             "market_reaction": "Limited immediate repricing; attention shifts to the wages sub-component and unemployment rate",
+             "rationale": "An in-line print confirms the existing trajectory without forcing a policy reassessment. Markets are likely to fade any initial volatility and await the next CPI or FOMC signal."},
+            {"label": _SC_LABELS[3],
+             "trigger": "-25K to -100K below forecast",
+             "market_reaction": f"{ccy} lower; rate-cut expectations advance; equities may strengthen on easing outlook; Treasuries rally",
+             "rationale": "Below-trend employment shifts Fed reaction function via the dual mandate. Real yield differential narrows versus G10 peers; risk premium on duration falls, supporting longer-dated bonds."},
+            {"label": _SC_LABELS[4],
+             "trigger": "Print ≥ -100K below forecast or outright negative job losses",
+             "market_reaction": f"{ccy} sharply lower; Treasury curve steepens; equities volatile (stagflation risk); gold and JPY as safe-haven flows",
+             "rationale": "A contractionary print signals recessionary labor dynamics, forcing the Fed to abandon the restrictive stance. Competing inflation pressures may, however, cap the extent of any bond rally, creating cross-asset dislocation."},
+        ]
+
+    # ── CPI / Inflation ───────────────────────────────────────────────────────
+    if any(k in n for k in ("cpi", "consumer price", "price index", "pce", "personal consumption", "inflation")):
+        return [
+            {"label": _SC_LABELS[0],
+             "trigger": "MoM print ≥ +0.4pp above forecast (e.g. +0.6% vs +0.2% expected)",
+             "market_reaction": f"{ccy} sharply higher; short-end yields spike; equities under pressure; inflation breakevens widen; gold mixed",
+             "rationale": "A large inflation surprise forces a hawkish repricing of the entire rate path. Real yields rise as the market prices in delayed cuts or additional hikes; equity discount rates increase simultaneously."},
+            {"label": _SC_LABELS[1],
+             "trigger": "+0.1pp to +0.4pp above forecast",
+             "market_reaction": f"{ccy} higher; 2Y yields rise; curve flattens; equities mixed; rate-cut pricing recedes by 1–2 meetings",
+             "rationale": "A moderate beat extends the 'stickier inflation' narrative, keeping the central bank on hold longer. Market inflation expectations reset slightly higher, sustaining the yield differential advantage."},
+            {"label": _SC_LABELS[2],
+             "trigger": "Within ±0.1pp of forecast on both headline and core",
+             "market_reaction": "Muted initial move; markets assess sub-components (services, shelter, energy ex-food)",
+             "rationale": "An in-line print neither accelerates cuts nor triggers hike fears. Attention shifts immediately to the next data point in the rate-decision sequence (PCE, wages, or the FOMC meeting itself)."},
+            {"label": _SC_LABELS[3],
+             "trigger": "-0.1pp to -0.3pp below forecast",
+             "market_reaction": f"{ccy} lower; rate-cut probability advances; Treasuries rally; equities benefit from lower discount-rate expectations",
+             "rationale": "Disinflation progress reduces the cost of easing. The Fed's real rate rises mechanically as nominal inflation falls, creating room to cut without losing policy credibility."},
+            {"label": _SC_LABELS[4],
+             "trigger": "Print ≥ -0.3pp below forecast or outright deflation signal",
+             "market_reaction": f"{ccy} sharply lower; front-end yields collapse; equities volatile (growth fears dominate); gold higher; deflation hedges outperform",
+             "rationale": "Deflation risk triggers a fundamental regime shift — central banks lose the 'inflation as cover' argument. Fisher equation dynamics push real rates higher even as nominal rates are cut, risking a liquidity trap."},
+        ]
+
+    # ── Rate Decisions (FOMC / ECB / BOE / BOJ / RBA) ────────────────────────
     if any(k in n for k in ("rate decision", "interest rate", "fomc", "boe", "ecb", "rba", "rbnz", "boj", "boc")):
-        return {
-            "beat":   f"Hawkish surprise (higher rate or tighter-than-expected guidance) strengthens {ccy} materially. Short-duration assets outperform; yield curve may flatten.",
-            "miss":   f"Dovish surprise (cut or softer guidance) pressures {ccy}. Equities may rally on reduced discount rates; long-duration bonds outperform.",
-            "inline": "Rate held as expected — market focus shifts entirely to statement tone, forward guidance, and any revised economic projections.",
-        }
+        return [
+            {"label": _SC_LABELS[0],
+             "trigger": "Unexpected rate hike, or hike of double the expected increment (e.g. +50bp vs +25bp priced)",
+             "market_reaction": f"{ccy} surges; short-end yields spike sharply; yield curve flattens aggressively; equities under pressure; carry-funded currencies weaken",
+             "rationale": "A hawkish surprise causes an immediate upward shift in the entire rate path. Carry traders rebalance toward the higher-yielding currency; equity duration premium rises as the risk-free rate jumps."},
+            {"label": _SC_LABELS[1],
+             "trigger": "Rate held with materially hawkish statement — fewer cuts signaled, dot plot shifted up, or explicit rate-hike bias added",
+             "market_reaction": f"{ccy} higher; 2Y yield rises; curve flattens; equities mixed; commodity currencies affected via USD strength",
+             "rationale": "Forward guidance is as powerful as the rate decision itself. A hawkish hold removes near-term cut probability from the OIS strip, sustaining the yield differential that supports the currency."},
+            {"label": _SC_LABELS[2],
+             "trigger": "Rate held with statement language unchanged — dot plot in line, neutral tone",
+             "market_reaction": "Limited directional move; attention focused on press conference tone and Q&A",
+             "rationale": "A fully-priced hold with no guidance change provides no new information. Markets look for any deviation in language as the primary signal; statement word-for-word comparison drives algos."},
+            {"label": _SC_LABELS[3],
+             "trigger": "Rate held with dovish tilt — more cuts signaled, lower terminal rate, downgraded economic projections",
+             "market_reaction": f"{ccy} lower; front-end yields fall; curve steepens; equities potentially higher on easing expectations; gold supported",
+             "rationale": "Forward guidance shifts market pricing on the OIS curve immediately. Lower expected rates reduce the currency's yield advantage and compress the carry premium; bonds rally as duration risk is repriced."},
+            {"label": _SC_LABELS[4],
+             "trigger": "Unexpected rate cut, or emergency inter-meeting cut",
+             "market_reaction": f"{ccy} sharply lower; front-end yields collapse; yield curve steepens dramatically; equities volatile; safe havens (JPY, CHF, gold) strengthen",
+             "rationale": "An emergency or unscheduled cut signals that the central bank sees a material deterioration in the economic outlook not previously communicated. The surprise triggers a broad risk-off repricing and calls into question the stability of the economic outlook."},
+        ]
+
+    # ── GDP ───────────────────────────────────────────────────────────────────
+    if any(k in n for k in ("gdp", "gross domestic")):
+        return [
+            {"label": _SC_LABELS[0],
+             "trigger": "Growth ≥ +1.0pp annualised above forecast (e.g. +3.5% vs +2.5% expected)",
+             "market_reaction": f"{ccy} higher; equities advance; cyclicals and financials outperform defensives; rate-cut timeline pushed out",
+             "rationale": "Strong growth reduces the probability of policy easing and supports the currency via higher expected rates. The wealth effect and stronger earnings outlook lift equities, particularly cyclical sectors sensitive to the growth cycle."},
+            {"label": _SC_LABELS[1],
+             "trigger": "+0.3pp to +1.0pp above forecast",
+             "market_reaction": f"{ccy} modestly higher; growth-sensitive equities outperform; yield curve flattens slightly",
+             "rationale": "A moderate growth beat extends the expansion without triggering inflation fears. The Taylor Rule leans hawkish at the margin; the yield differential advantage for the currency persists."},
+            {"label": _SC_LABELS[2],
+             "trigger": "Within ±0.3pp of forecast",
+             "market_reaction": "Limited repricing; focus shifts to sub-components (consumption, investment, inventories) and the next quarter's outlook",
+             "rationale": "An in-line GDP print confirms the existing consensus trajectory. Markets assess whether the composition of growth (consumption vs. investment) has any implications for future quarters."},
+            {"label": _SC_LABELS[3],
+             "trigger": "-0.3pp to -1.0pp below forecast",
+             "market_reaction": f"{ccy} lower; defensive sectors outperform; rate-cut expectations advance; Treasuries rally; commodity currencies most exposed",
+             "rationale": "A growth miss signals that the demand side of the economy is softening, reducing the central bank's ability to maintain restrictive rates. The output gap widens, exerting disinflationary pressure."},
+            {"label": _SC_LABELS[4],
+             "trigger": "Contraction or ≥ -1.0pp below forecast; recession risk confirmed",
+             "market_reaction": f"{ccy} sharply lower; safe havens (JPY, CHF, Treasuries, gold) strengthen; equities retreat; credit spreads widen",
+             "rationale": "A recessionary print forces an immediate reassessment of the rate path and corporate earnings outlook. Flight-to-quality flows dominate; the central bank faces pressure to cut aggressively, compressing the currency's yield advantage to zero or negative."},
+        ]
+
+    # ── PMI / ISM ─────────────────────────────────────────────────────────────
+    if any(k in n for k in ("pmi", "purchasing managers", "ism manufacturing", "ism services", "ism non")):
+        return [
+            {"label": _SC_LABELS[0],
+             "trigger": "Reading ≥ 55 and ≥ 2.5 points above forecast",
+             "market_reaction": f"{ccy} higher; cyclical equities outperform; industrial commodities (copper, oil) strengthen; risk-on tone",
+             "rationale": "A strong PMI beat signals robust expansion momentum, reducing the probability of a policy error (premature easing). The procyclical currency benefits via improved growth expectations; commodity-linked assets respond to demand signals."},
+            {"label": _SC_LABELS[1],
+             "trigger": "Reading above 50 and +1 to +2.5 points above forecast",
+             "market_reaction": f"{ccy} modestly higher; equities mixed but cyclicals supported; risk appetite improves at the margin",
+             "rationale": "A moderate expansion beat confirms recovery without triggering inflation concerns. The yield differential for the currency is marginally supported; sector rotation into cyclicals may occur."},
+            {"label": _SC_LABELS[2],
+             "trigger": "Reading within ±1 point of forecast, near the 50 expansion/contraction boundary",
+             "market_reaction": "Limited immediate move; absolute level relative to 50 is the primary signal",
+             "rationale": "An in-line PMI provides no new directional information. Traders monitor whether the absolute reading confirms expansion (>50) or contraction (<50), which carries more weight than the surprise component alone."},
+            {"label": _SC_LABELS[3],
+             "trigger": "Reading below forecast by 1–2.5 points, or dipping toward 50",
+             "market_reaction": f"{ccy} lower; defensive sectors (utilities, healthcare) outperform; rate-cut expectations advance marginally",
+             "rationale": "A miss signals that expansion momentum is fading. The growth-sensitive currency weakens as traders price in a softer economic trajectory and a more accommodative monetary policy response."},
+            {"label": _SC_LABELS[4],
+             "trigger": "Reading below 50 (contraction territory) and/or ≥ 2.5 points below forecast",
+             "market_reaction": f"{ccy} sharply lower; equities retreat (especially industrials); safe havens strengthen; bond yields fall",
+             "rationale": "A contractionary PMI reading signals that the manufacturing or services sector is shrinking. This strengthens the case for rate cuts, compressing the yield advantage of the domestic currency and triggering risk-off repositioning."},
+        ]
+
+    # ── Retail Sales ──────────────────────────────────────────────────────────
     if any(k in n for k in ("retail sales", "retail")):
-        return {
-            "beat":   f"Strong consumer spending signals economic resilience, supporting {ccy} and modestly lifting rate expectations.",
-            "miss":   f"Weak retail data raises demand concerns, softening {ccy}. Discretionary and consumer cyclical sectors most exposed.",
-            "inline": "Sales in line with forecast — consumption trend confirmed. Limited immediate market impact without material revision to prior data.",
-        }
+        return [
+            {"label": _SC_LABELS[0],
+             "trigger": "MoM print ≥ +0.5pp above forecast (e.g. +1.2% vs +0.7% expected)",
+             "market_reaction": f"{ccy} higher; consumer discretionary equities outperform; Treasuries weaken as rate-cut timeline extends",
+             "rationale": "Strong consumer spending validates the 'soft landing' scenario, reducing pressure on the central bank to ease. Robust demand supports the inflation outlook, keeping rates elevated and the yield differential in the currency's favour."},
+            {"label": _SC_LABELS[1],
+             "trigger": "+0.1pp to +0.5pp above forecast",
+             "market_reaction": f"{ccy} modestly higher; risk-on sentiment supported; discretionary outperforms staples",
+             "rationale": "A moderate retail beat signals consumer resilience without signalling overheating. This narrows but does not eliminate the possibility of near-term rate cuts, providing a mild positive for the currency."},
+            {"label": _SC_LABELS[2],
+             "trigger": "Within ±0.1pp of forecast",
+             "market_reaction": "Limited reaction; focus on core retail sales (ex-autos) and revision to prior month",
+             "rationale": "Consensus print confirms spending trajectory. The more informative sub-components (control group, ex-autos/gas) and any prior-month revision are the key takeaways."},
+            {"label": _SC_LABELS[3],
+             "trigger": "-0.1pp to -0.5pp below forecast",
+             "market_reaction": f"{ccy} lower; consumer discretionary equities lag; Treasuries rally on rate-cut expectations",
+             "rationale": "Weaker consumer spending signals that demand-side pressures are abating, increasing the probability of central bank easing. The domestic currency weakens as the expected rate premium is reduced."},
+            {"label": _SC_LABELS[4],
+             "trigger": "Print ≥ -0.5pp below forecast or negative reading",
+             "market_reaction": f"{ccy} sharply lower; defensives and Treasuries rally strongly; discretionary equities under pressure",
+             "rationale": "A large miss in consumer spending raises recession risk. GDP models are revised lower; central bank rate-cut pricing accelerates. The currency loses its yield advantage as the policy rate path shifts materially downward."},
+        ]
+
+    # ── Unemployment / Jobless Claims ──────────────────────────────────────────
     if any(k in n for k in ("unemployment", "jobless", "initial claims", "claims")):
-        return {
-            "beat":   f"Lower unemployment or fewer claims confirms tight labor market conditions, supporting {ccy} through sustained wage and rate expectations.",
-            "miss":   f"Rising unemployment or higher claims signals labor market softening, weighing on {ccy} and strengthening rate-cut bets.",
-            "inline": "Claims in line with consensus — labor market trend intact. Awaiting next primary labor data for directional signal.",
-        }
+        return [
+            {"label": _SC_LABELS[0],
+             "trigger": "Claims below consensus by ≥ 20K, or unemployment rate 0.2pp below forecast",
+             "market_reaction": f"{ccy} higher; rate-cut expectations pushed out; equities mixed; short-end yields rise",
+             "rationale": "A tight labour market reduces the Fed's urgency to ease. Below-NAIRU unemployment maintains wage pressure, sustaining the inflation outlook and the 'higher for longer' rate narrative."},
+            {"label": _SC_LABELS[1],
+             "trigger": "Claims below consensus by 5K–20K, or unemployment 0.1pp lower than expected",
+             "market_reaction": f"{ccy} modestly supported; curve flattens marginally; market OIS pricing adjusts slightly hawkish",
+             "rationale": "A moderate labour market beat confirms resilience without triggering aggressive policy repricing. The employment pillar of the dual mandate remains satisfied, reducing political pressure on the central bank to ease."},
+            {"label": _SC_LABELS[2],
+             "trigger": "Within ±5K of forecast (initial claims) or ±0.1pp (unemployment rate)",
+             "market_reaction": "Muted; focus shifts to wage data and the broader employment trend",
+             "rationale": "In-line claims data confirms the existing trend without providing a new directional signal. The market awaits the NFP release for a more complete picture of labour market conditions."},
+            {"label": _SC_LABELS[3],
+             "trigger": "Claims above consensus by 5K–20K, or unemployment 0.1pp higher than expected",
+             "market_reaction": f"{ccy} modestly weaker; rate-cut probability advances slightly; Treasuries marginally bid",
+             "rationale": "A moderate softening in labour conditions shifts the dual mandate balance modestly toward the employment side. The market begins to price a marginally earlier easing cycle without a dramatic repricing."},
+            {"label": _SC_LABELS[4],
+             "trigger": "Claims ≥ 20K above consensus or unemployment rate 0.2pp+ above forecast",
+             "market_reaction": f"{ccy} lower; rate-cut expectations accelerate significantly; equities volatile; Treasuries rally",
+             "rationale": "A material weakening in employment is a leading recession indicator. The Taylor Rule shifts decisively toward easing; inflation concerns recede relative to growth concerns, reducing the yield premium for the domestic currency."},
+        ]
+
+    # ── PPI ───────────────────────────────────────────────────────────────────
+    if any(k in n for k in ("ppi", "producer price", "producer")):
+        return [
+            {"label": _SC_LABELS[0],
+             "trigger": "MoM PPI ≥ +0.5pp above forecast",
+             "market_reaction": f"{ccy} higher as pipeline inflation signals; equities mixed; longer-dated bond yields rise",
+             "rationale": "PPI is a leading indicator for CPI — upstream price pressure tends to flow through to consumer prices with a 2–3 month lag, adding to the case for sustained monetary tightening."},
+            {"label": _SC_LABELS[1],
+             "trigger": "+0.1pp to +0.5pp above forecast",
+             "market_reaction": f"{ccy} modestly higher; inflation breakevens widen slightly; equities mixed",
+             "rationale": "A moderate PPI beat reinforces the 'sticky inflation' narrative and keeps rate-cut expectations in check, providing a marginal positive for the currency's yield differential."},
+            {"label": _SC_LABELS[2],
+             "trigger": "Within ±0.1pp of forecast",
+             "market_reaction": "Muted; headline CPI impact expected to be limited; attention on core components",
+             "rationale": "An in-line PPI confirms disinflation or stable inflation dynamics at the producer level, consistent with the central bank's existing policy stance."},
+            {"label": _SC_LABELS[3],
+             "trigger": "-0.1pp to -0.4pp below forecast",
+             "market_reaction": f"{ccy} lower; Treasuries bid; rate-cut timeline advances marginally",
+             "rationale": "Below-expected producer prices signal easing pipeline inflation pressures, supporting the disinflation narrative and potentially bringing forward the rate-cut timeline."},
+            {"label": _SC_LABELS[4],
+             "trigger": "PPI ≥ -0.4pp below forecast or negative producer deflation",
+             "market_reaction": f"{ccy} sharply lower; bonds rally strongly; deflation fears emerge; equities uncertain",
+             "rationale": "Producer deflation signals a significant demand-side contraction or commodity-driven price collapse. Transmitted to consumer prices, this could accelerate the central bank's easing cycle and push the yield differential sharply negative."},
+        ]
+
+    # ── Trade Balance ─────────────────────────────────────────────────────────
     if any(k in n for k in ("trade balance", "current account", "trade deficit", "trade surplus")):
-        return {
-            "beat":   f"Narrowing deficit or wider surplus is {ccy}-positive, reducing external imbalance pressure and improving net foreign demand for the currency.",
-            "miss":   f"Wider trade deficit pressures {ccy} as outflows may outpace inflows, raising external financing concerns.",
-            "inline": "Trade balance as expected — no immediate currency repricing signal. Focus remains on broader macro drivers.",
-        }
-    # Generic fallback
-    return {
-        "beat":   f"A stronger-than-expected reading is generally {ccy}-positive, supporting the domestic macro outlook and potentially moderating rate-cut expectations.",
-        "miss":   f"A weaker-than-expected reading may weigh on {ccy} by reducing growth confidence or accelerating expectations of monetary easing.",
-        "inline": "Result in line with forecast — limited immediate market reaction anticipated. Revisions to the prior period figure are the key swing factor to monitor.",
-    }
+        return [
+            {"label": _SC_LABELS[0],
+             "trigger": "Surplus materially wider than expected, or deficit narrows by ≥ 10% vs forecast",
+             "market_reaction": f"{ccy} higher; external demand for the currency increases; current account surplus reduces external financing risk",
+             "rationale": "A better trade balance reduces the structural selling pressure on the currency from import payments. A surplus implies net foreign demand for domestic currency; improving external accounts reduce current account vulnerability."},
+            {"label": _SC_LABELS[1],
+             "trigger": "Slight improvement versus forecast",
+             "market_reaction": f"{ccy} mildly supported; limited market impact absent structural implications",
+             "rationale": "A marginal improvement in trade flows provides a small fundamental tailwind for the currency, though the FX impact is typically muted unless the change is large relative to GDP."},
+            {"label": _SC_LABELS[2],
+             "trigger": "In line with consensus",
+             "market_reaction": "No immediate repricing; attention turns to sub-components (goods vs services, key trading partner flows)",
+             "rationale": "Consensus trade data provides no new information about external demand conditions. The currency impact depends on whether the composition reveals shifts in key trading relationships."},
+            {"label": _SC_LABELS[3],
+             "trigger": "Slight deterioration versus forecast",
+             "market_reaction": f"{ccy} mildly lower; external deficit concerns marginal",
+             "rationale": "A slightly wider deficit increases the theoretical supply of the domestic currency to fund imports, but the FX impact is typically minimal unless it represents a structural trend deterioration."},
+            {"label": _SC_LABELS[4],
+             "trigger": "Deficit significantly wider than expected or structural deterioration confirmed",
+             "market_reaction": f"{ccy} lower; current account vulnerability narrative intensifies; sovereign CDS spreads may widen",
+             "rationale": "A large deficit implies persistent outflows to fund imports, creating structural downward pressure on the currency. External financing requirement rises, increasing vulnerability to shifts in capital flow sentiment."},
+        ]
+
+    # ── Generic fallback ──────────────────────────────────────────────────────
+    return [
+        {"label": _SC_LABELS[0],
+         "trigger": "Print significantly above forecast — magnitude depends on event unit",
+         "market_reaction": f"{ccy} higher; risk assets potentially supported; rate-cut expectations reduced",
+         "rationale": "A strong beat typically strengthens the domestic macro outlook, sustaining the central bank's restrictive stance and maintaining the currency's yield advantage via interest rate parity."},
+        {"label": _SC_LABELS[1],
+         "trigger": "Print modestly above forecast",
+         "market_reaction": f"{ccy} modestly higher; limited repricing of rate expectations",
+         "rationale": "A moderate beat confirms positive trend without forcing a material policy reassessment. The marginal improvement in the macro outlook provides a mild positive for the currency."},
+        {"label": _SC_LABELS[2],
+         "trigger": "Print within a narrow band of the forecast",
+         "market_reaction": "Muted reaction; markets await next data point",
+         "rationale": "An in-line print provides no new directional signal. Attention shifts to the next high-impact release or central bank communication."},
+        {"label": _SC_LABELS[3],
+         "trigger": "Print modestly below forecast",
+         "market_reaction": f"{ccy} modestly lower; marginal advance in rate-cut pricing",
+         "rationale": "A moderate miss softens the domestic macro outlook marginally, reducing the currency's yield advantage and increasing the probability of an earlier easing cycle."},
+        {"label": _SC_LABELS[4],
+         "trigger": "Print significantly below forecast",
+         "market_reaction": f"{ccy} lower; Treasuries/Bunds rally; safe-haven currencies (JPY, CHF) strengthen",
+         "rationale": "A large miss raises growth or policy concerns, forcing a reassessment of the rate path. The currency loses its yield advantage as easing expectations bring forward the projected rate-cut cycle."},
+    ]
+
+
+# Colour coding for each scenario row (hawkish → dovish)
+_SC_ROW_STYLES = [
+    {"border": "#14532d", "text": "#4ade80",  "arrow": "▲▲"},  # extreme hawkish
+    {"border": "#166534", "text": "#86efac",  "arrow": "▲"},   # hawkish beat
+    {"border": "#374151", "text": "#94a3b8",  "arrow": "→"},   # consensus
+    {"border": "#78350f", "text": "#fbbf24",  "arrow": "▼"},   # dovish miss
+    {"border": "#7f1d1d", "text": "#f87171",  "arrow": "▼▼"},  # extreme dovish
+]
+
+
+def _render_scenario_matrix(matrix: list[dict]) -> None:
+    """Render the 5-scenario matrix as a styled HTML table."""
+    hdr = (
+        '<table class="sc-tbl">'
+        "<thead><tr>"
+        '<th style="width:16%;">Scenario</th>'
+        '<th style="width:20%;">Trigger Condition</th>'
+        '<th style="width:24%;">Market Reaction</th>'
+        '<th>Expert Rationale</th>'
+        "</tr></thead><tbody>"
+    )
+    rows = ""
+    for i, sc in enumerate(matrix[:5]):
+        st = _SC_ROW_STYLES[i]
+        rows += (
+            f'<tr style="border-left:3px solid {st["border"]};">'
+            f'<td class="sc-cell-label" style="color:{st["text"]};">'
+            f'{st["arrow"]}&nbsp;{sc.get("label","")}</td>'
+            f'<td class="sc-cell-trigger">{sc.get("trigger","")}</td>'
+            f'<td class="sc-cell-reaction">{sc.get("market_reaction", sc.get("reaction",""))}</td>'
+            f'<td class="sc-cell-rationale">{sc.get("rationale","")}</td>'
+            f"</tr>"
+        )
+    st_html(hdr + rows + "</tbody></table>")
+
+
+def st_html(html: str) -> None:
+    st.markdown(html, unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -678,32 +924,9 @@ else:
             # Scenario analysis — only for medium/high impact events
             if ev.get("impact_level") in ("high", "medium"):
                 with st.expander(f"Scenario Analysis — {ev.get('event_name', '')}"):
-                    sc = _scenarios(ev.get("event_name", ""), ev.get("currency", "USD"))
-                    c1, c2, c3 = st.columns(3)
-                    with c1:
-                        st.markdown(
-                            f'<div class="sc-beat">'
-                            f'<div class="sc-lbl lbl-b">BEAT</div>'
-                            f'<div class="sc-txt">{sc["beat"]}</div>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-                    with c2:
-                        st.markdown(
-                            f'<div class="sc-miss">'
-                            f'<div class="sc-lbl lbl-m">MISS</div>'
-                            f'<div class="sc-txt">{sc["miss"]}</div>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
-                    with c3:
-                        st.markdown(
-                            f'<div class="sc-inline">'
-                            f'<div class="sc-lbl lbl-i">IN-LINE</div>'
-                            f'<div class="sc-txt">{sc["inline"]}</div>'
-                            f'</div>',
-                            unsafe_allow_html=True,
-                        )
+                    _render_scenario_matrix(
+                        _scenario_matrix(ev.get("event_name", ""), ev.get("currency", "USD"))
+                    )
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────

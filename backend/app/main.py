@@ -4,6 +4,7 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.api.analysis_router import router as analysis_router
 from app.api.history_router import router as history_router
@@ -29,6 +30,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # ── Database ──────────────────────────────────────────────────────────────
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Idempotent migration: add scenario_matrix to existing DBs
+        try:
+            await conn.execute(
+                text("ALTER TABLE analysis_results ADD COLUMN scenario_matrix TEXT")
+            )
+            logger.info("Migration: added scenario_matrix column")
+        except Exception:
+            pass  # column already exists
     logger.info("Database tables ensured")
 
     # ── Event scheduler (Finnhub → AI → DB) ──────────────────────────────────

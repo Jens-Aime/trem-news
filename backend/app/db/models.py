@@ -42,6 +42,7 @@ class AnalysisResultORM(Base):
     risk_level = Column(String, nullable=False)
     confidence_score = Column(Float, nullable=False)
     key_levels = Column(JSON, nullable=True)
+    scenario_matrix = Column(JSON, nullable=True)
     model_used = Column(String, nullable=False)
     cached = Column(Boolean, default=False)
     analyzed_at = Column(DateTime, nullable=False)

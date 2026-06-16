@@ -39,6 +39,7 @@ async def save_analysis(
         risk_level=result.risk_level.value,
         confidence_score=result.confidence_score,
         key_levels=result.key_levels,
+        scenario_matrix=result.scenario_matrix,
         model_used=result.model_used,
         cached=result.cached,
         analyzed_at=result.analyzed_at,

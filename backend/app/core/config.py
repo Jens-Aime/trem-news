@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-4-6"
     openai_model: str = "gpt-4o"
     gemini_model: str = "gemini-1.5-flash"
-    ai_max_tokens: int = 1024
+    ai_max_tokens: int = 2048
 
     # Analysis cache
     ai_cache_ttl_seconds: int = 3600   # 1 hour
