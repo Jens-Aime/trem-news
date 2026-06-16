@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.analysis_router import router as analysis_router
 from app.api.ingestion_router import router as ingestion_router
@@ -10,9 +11,11 @@ from app.api.scheduler_router import router as scheduler_router
 from app.api.ws_router import router as ws_router
 from app.core.ai_orchestrator import get_ai_orchestrator
 from app.core.config import get_settings
+from app.core.event_store import get_event_store
 from app.core.scheduler import EventScheduler
 from app.core.websocket_manager import get_connection_manager
 from app.ingestion.finnhub_client import FinnhubClient
+from app.models import AnalysisResult
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +67,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Allow cross-origin fetch from the Next.js frontend (needed in Codespaces
+# where the frontend and backend run on different subdomains).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["*"],
+)
+
 app.include_router(ingestion_router, prefix="/api/v1")
 app.include_router(analysis_router, prefix="/api/v1")
 app.include_router(scheduler_router, prefix="/api/v1")
@@ -73,3 +85,9 @@ app.include_router(ws_router, prefix="/ws")
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "service": settings.app_name}
+
+
+@app.get("/api/v1/latest-events", response_model=list[AnalysisResult])
+async def latest_events() -> list[AnalysisResult]:
+    """Return the 5 most recent analysis results for HTTP polling clients."""
+    return get_event_store().latest(5)

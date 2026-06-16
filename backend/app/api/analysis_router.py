@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.ai_orchestrator import AIAnalysisError, AIOrchestrator, get_ai_orchestrator
+from app.core.event_store import get_event_store
 from app.core.websocket_manager import (
     ConnectionManager,
     WSMessage,
@@ -36,6 +37,8 @@ async def analyse_event(
         result = await orchestrator.analyze(processed_event)
     except AIAnalysisError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    get_event_store().append(result)
 
     # Push to all connected WS clients (fire-and-forget; never blocks the HTTP response)
     if manager.connection_count() > 0:
