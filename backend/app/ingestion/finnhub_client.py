@@ -75,11 +75,19 @@ class FinnhubClient:
                     )
                     return self._normalize_raw(events)
                 except httpx.HTTPStatusError as exc:
+                    status = exc.response.status_code
+                    if status in (401, 403):
+                        logger.warning(
+                            "Finnhub returned HTTP %s — API key not authorised. "
+                            "Returning empty calendar (no retries).",
+                            status,
+                        )
+                        return []
                     logger.warning(
                         "Attempt %d/%d failed: HTTP %s",
                         attempt,
                         self._settings.max_retries,
-                        exc.response.status_code,
+                        status,
                     )
                     if attempt == self._settings.max_retries:
                         raise

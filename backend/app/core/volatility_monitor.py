@@ -86,7 +86,7 @@ def _fetch_price(ticker: str) -> float | None:
         return None
 
     try:
-        hist = yf.Ticker(ticker).history(period="60m", interval="1m")
+        hist = yf.Ticker(ticker).history(period="1d", interval="15m")
         if not hist.empty:
             return float(hist["Close"].iloc[-1])
         return None
