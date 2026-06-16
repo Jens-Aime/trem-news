@@ -1,7 +1,9 @@
+from datetime import datetime, timezone
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import AnalysisResultORM, EconomicEventORM
+from app.db.models import AnalysisResultORM, EconomicEventORM, VolatilityAlertORM
 from app.models import AnalysisResult, ProcessedEvent
 
 
@@ -92,3 +94,84 @@ async def get_history(
         )
 
     return items, total
+
+
+# ── Volatility alerts ─────────────────────────────────────────────────────────
+
+async def save_volatility_alert(
+    session: AsyncSession,
+    asset_name: str,
+    ticker: str,
+    spike_type: str,
+    current_price: float,
+    z_score: float,
+    cause_found: bool,
+    explanation: str,
+) -> VolatilityAlertORM:
+    alert = VolatilityAlertORM(
+        asset=asset_name,
+        ticker=ticker,
+        spike_type=spike_type,
+        current_price=current_price,
+        z_score=z_score,
+        cause_found=cause_found,
+        explanation=explanation,
+        detected_at=datetime.now(timezone.utc),
+    )
+    session.add(alert)
+    return alert
+
+
+async def get_volatility_alerts(
+    session: AsyncSession,
+    limit: int = 20,
+) -> tuple[list[dict], int]:
+    total: int = await session.scalar(
+        select(func.count(VolatilityAlertORM.id))
+    ) or 0
+
+    rows = await session.execute(
+        select(VolatilityAlertORM)
+        .order_by(VolatilityAlertORM.detected_at.desc())
+        .limit(limit)
+    )
+    items = [
+        {
+            "id": a.id,
+            "asset": a.asset,
+            "ticker": a.ticker,
+            "spike_type": a.spike_type,
+            "current_price": a.current_price,
+            "z_score": a.z_score,
+            "cause_found": a.cause_found,
+            "explanation": a.explanation,
+            "detected_at": a.detected_at.isoformat(),
+        }
+        for a in rows.scalars()
+    ]
+    return items, total
+
+
+async def get_recent_events(
+    session: AsyncSession,
+    limit: int = 5,
+) -> list[dict]:
+    """Return the most recent economic events for spike-explanation context."""
+    rows = await session.execute(
+        select(EconomicEventORM)
+        .order_by(EconomicEventORM.event_timestamp.desc())
+        .limit(limit)
+    )
+    return [
+        {
+            "event_name": e.event_name,
+            "country": e.country,
+            "currency": e.currency,
+            "actual": e.actual,
+            "forecast": e.forecast,
+            "surprise_pct": e.surprise_pct,
+            "impact_level": e.impact_level,
+            "event_timestamp": e.event_timestamp.isoformat(),
+        }
+        for e in rows.scalars()
+    ]

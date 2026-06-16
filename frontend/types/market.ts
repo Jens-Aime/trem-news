@@ -58,3 +58,22 @@ export interface HistoryResponse {
   page_size: number;
   pages: number;
 }
+
+export type SpikeType = "BULLISH_SURGE" | "BEARISH_DROP";
+
+export interface VolatilityAlert {
+  id: number;
+  asset: string;
+  ticker: string;
+  spike_type: SpikeType;
+  current_price: number;
+  z_score: number;
+  cause_found: boolean;
+  explanation: string;
+  detected_at: string;
+}
+
+export interface VolatilityAlertsResponse {
+  items: VolatilityAlert[];
+  total: number;
+}

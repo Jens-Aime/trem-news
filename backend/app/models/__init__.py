@@ -1,6 +1,7 @@
 from .economic_event import EconomicEvent, ImpactLevel, ProcessedEvent
 from .analysis_result import AnalysisResult, RiskLevel, Sentiment
 from .history import HistoryEntry, HistoryResponse
+from .volatility import VolatilityAlert, VolatilityAlertsResponse
 
 __all__ = [
     "EconomicEvent",
@@ -11,4 +12,6 @@ __all__ = [
     "Sentiment",
     "HistoryEntry",
     "HistoryResponse",
+    "VolatilityAlert",
+    "VolatilityAlertsResponse",
 ]

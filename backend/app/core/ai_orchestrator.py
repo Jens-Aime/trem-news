@@ -103,6 +103,117 @@ class AIOrchestrator:
             event.set()
             self._inflight.pop(cache_key, None)
 
+    async def explain_volatility_spike(
+        self,
+        asset_name: str,
+        spike_type: str,
+        z_score: float,
+        current_price: float,
+        recent_events: list[dict],
+    ) -> dict:
+        """
+        Ask the LLM to explain a detected price spike given recent economic context.
+        Returns a dict: {asset, spike_type, cause_found, explanation}.
+        """
+        direction = "above" if z_score > 0 else "below"
+        events_block = "None on record." if not recent_events else "\n".join(
+            f"  • {e['event_name']} ({e['country']}, {e['event_timestamp'][:10]})"
+            f" — actual={e['actual']} forecast={e['forecast']}"
+            f" surprise={e.get('surprise_pct', 'N/A')}% impact={e['impact_level']}"
+            for e in recent_events
+        )
+        prompt = (
+            f"=== VOLATILITY SPIKE DETECTED ===\n"
+            f"Asset        : {asset_name}\n"
+            f"Spike Type   : {spike_type}\n"
+            f"Z-Score      : {z_score:+.2f} σ\n"
+            f"Current Price: {current_price:.5f}\n"
+            f"Interpretation: Price is {abs(z_score):.1f} standard deviations {direction} "
+            f"its 15-minute rolling average.\n\n"
+            f"=== RECENT ECONOMIC EVENTS (last 24h, for context) ===\n"
+            f"{events_block}\n\n"
+            f"=== TASK ===\n"
+            f"Identify the most probable macroeconomic cause for this spike.\n"
+            f"If one of the listed events directly explains the move, cite it explicitly.\n"
+            f"Return ONLY this JSON (no prose, no fences):\n"
+            f'{{"asset": "{asset_name}", "spike_type": "{spike_type}", '
+            f'"cause_found": true_or_false, "explanation": "<1-2 sober sentences>"}}'
+        )
+
+        system = (
+            "You are a quantitative macro analyst. "
+            "Analyse market price spikes and return ONLY valid JSON. No prose. No fences."
+        )
+
+        try:
+            raw = await self._call_provider_raw(system, prompt)
+            data = self._extract_json(raw)
+            if data is None:
+                raise ValueError("no JSON in response")
+            data.setdefault("asset", asset_name)
+            data.setdefault("spike_type", spike_type)
+            data.setdefault("cause_found", False)
+            data.setdefault("explanation", raw[:300])
+            return data
+        except Exception as exc:
+            logger.error("explain_volatility_spike failed: %s", exc)
+            return {
+                "asset": asset_name,
+                "spike_type": spike_type,
+                "cause_found": False,
+                "explanation": f"AI analysis unavailable: {exc}",
+            }
+
+    async def _call_provider_raw(self, system: str, user: str) -> str:
+        """Call the configured LLM with raw system/user strings; return raw text."""
+        if self._settings.ai_provider == "gemini":
+            try:
+                import google.generativeai as genai
+            except ImportError as exc:
+                raise AIAnalysisError("google-generativeai not installed") from exc
+            genai.configure(api_key=self._settings.gemini_api_key)
+            model = genai.GenerativeModel(
+                model_name=self._settings.gemini_model,
+                generation_config={"response_mime_type": "application/json"},
+                system_instruction=system,
+            )
+            response = await model.generate_content_async(user)
+            return response.text
+
+        if self._settings.ai_provider == "anthropic":
+            try:
+                import anthropic as _anthropic
+            except ImportError as exc:
+                raise AIAnalysisError("anthropic not installed") from exc
+            client = _anthropic.AsyncAnthropic(api_key=self._settings.anthropic_api_key)
+            msg = await client.messages.create(
+                model=self._settings.anthropic_model,
+                max_tokens=512,
+                system=system,
+                messages=[
+                    {"role": "user", "content": user},
+                    {"role": "assistant", "content": "{"},
+                ],
+            )
+            return "{" + msg.content[0].text
+
+        # OpenAI fallback
+        try:
+            import openai as _openai
+        except ImportError as exc:
+            raise AIAnalysisError("openai not installed") from exc
+        client = _openai.AsyncOpenAI(api_key=self._settings.openai_api_key)
+        resp = await client.chat.completions.create(
+            model=self._settings.openai_model,
+            max_tokens=512,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        return resp.choices[0].message.content or ""
+
     def cache_info(self) -> dict[str, Any]:
         return {
             "size": len(self._cache),

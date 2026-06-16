@@ -5,6 +5,7 @@ import { ConnectionStatusBadge } from "@/components/ConnectionStatus";
 import { LiveFeed } from "@/components/LiveFeed";
 import { StatsBar } from "@/components/StatsBar";
 import { HistoricalView } from "@/components/HistoricalView";
+import { SpikeAlertBanner } from "@/components/SpikeAlertBanner";
 import { useMarketPulse } from "@/hooks/useMarketPulse";
 
 export function Dashboard() {
@@ -22,13 +23,15 @@ export function Dashboard() {
               <span className="font-light text-slate-400">Intelligence</span>
             </span>
           </div>
-
           <ConnectionStatusBadge status={status} />
         </div>
       </header>
 
       {/* ── Main content ────────────────────────────────────────── */}
       <main className="mx-auto max-w-7xl px-4 py-6">
+        {/* Spike alert banner — appears when a new volatility alert arrives */}
+        <SpikeAlertBanner />
+
         <StatsBar events={events} />
 
         <div className="mt-4 grid grid-cols-1 gap-6 xl:grid-cols-2">
