@@ -740,8 +740,15 @@ def st_html(html: str) -> None:
     st.markdown(html, unsafe_allow_html=True)
 
 
+# ── Session state (alert detection across reruns) ─────────────────────────────
+
+if "last_alert_ts" not in st.session_state:
+    st.session_state.last_alert_ts = None
+
+_ALL_CCYS = sorted(["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "NZD", "CNY"])
+
 # ══════════════════════════════════════════════════════════════════════════════
-# SIDEBAR — Volatility monitor
+# SIDEBAR — Volatility status + interactive filters
 # ══════════════════════════════════════════════════════════════════════════════
 
 with st.sidebar:
@@ -749,10 +756,10 @@ with st.sidebar:
     st.caption("Decision Support System")
     st.divider()
 
-    alerts_df = load_alerts()
-    vol_level, vol_label = _vol_status(alerts_df)
+    # Unfiltered alerts for system-wide vol status
+    _sb_alerts = load_alerts()
+    vol_level, vol_label = _vol_status(_sb_alerts)
 
-    # Animated pulsing dot + status label
     st.markdown(
         f'<div class="vol-strip">'
         f'<span class="vdot vdot-{vol_level}"></span>'
@@ -761,78 +768,113 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    # Popover: click for detailed volatility context
     with st.popover("View Details", use_container_width=True):
-        if alerts_df.empty:
+        if _sb_alerts.empty:
             st.caption(
                 "No spike alerts recorded. The volatility monitor warms up over "
                 "the first 5 price samples (approx. 5 minutes) before detection activates."
             )
         else:
-            latest = alerts_df.iloc[0]
-            is_sim = str(latest["explanation"]).startswith("[SIM]")
-            expl   = str(latest["explanation"]).removeprefix("[SIM]").strip()
-            sp_col = "#22c55e" if latest["spike_type"] == "BULLISH_SURGE" else "#ef4444"
-            spike_label = latest["spike_type"].replace("_", " ")
-
+            _sb_lat = _sb_alerts.iloc[0]
+            _sb_sim = str(_sb_lat["explanation"]).startswith("[SIM]")
+            _sb_expl = str(_sb_lat["explanation"]).removeprefix("[SIM]").strip()
+            _sb_col  = "#22c55e" if _sb_lat["spike_type"] == "BULLISH_SURGE" else "#ef4444"
             st.markdown(
                 f'<div style="font-size:.68rem;font-weight:700;letter-spacing:.08em;'
-                f'text-transform:uppercase;color:{sp_col};margin-bottom:7px;">'
-                f'{latest["asset"]} &mdash; {spike_label}</div>',
+                f'text-transform:uppercase;color:{_sb_col};margin-bottom:7px;">'
+                f'{_sb_lat["asset"]} &mdash; {_sb_lat["spike_type"].replace("_"," ")}</div>',
                 unsafe_allow_html=True,
             )
             st.markdown(
                 f'<div style="font-size:.78rem;color:#94a3b8;line-height:1.6;">'
-                f'{expl or "AI analysis pending."}</div>',
+                f'{_sb_expl or "AI analysis pending."}</div>',
                 unsafe_allow_html=True,
             )
-            z = abs(float(latest["z_score"]))
-            p = float(latest["current_price"])
-            sim_note = " &nbsp;|&nbsp; Simulated data" if is_sim else ""
+            _sb_z = abs(float(_sb_lat["z_score"]))
+            _sb_p = float(_sb_lat["current_price"])
+            _sb_sn = " &nbsp;|&nbsp; Simulated data" if _sb_sim else ""
             st.markdown(
                 f'<div style="margin-top:9px;font-size:.66rem;color:#475569;">'
-                f'Z-Score: {z:.2f}&thinsp;&sigma; &nbsp;|&nbsp; Price: {p:.4f}{sim_note}</div>',
+                f'Z-Score: {_sb_z:.2f}&thinsp;&sigma; &nbsp;|&nbsp; Price: {_sb_p:.4f}{_sb_sn}</div>',
                 unsafe_allow_html=True,
             )
-
-            if len(alerts_df) > 1:
+            if len(_sb_alerts) > 1:
                 st.divider()
                 st.markdown(
                     '<div style="font-size:.58rem;font-weight:700;letter-spacing:.1em;'
                     'text-transform:uppercase;color:#334155;margin-bottom:6px;">Recent Alerts</div>',
                     unsafe_allow_html=True,
                 )
-                for _, row in alerts_df.head(6).iterrows():
-                    c = "#22c55e" if row["spike_type"] == "BULLISH_SURGE" else "#ef4444"
+                for _, _sb_row in _sb_alerts.head(6).iterrows():
+                    _sb_rc = "#22c55e" if _sb_row["spike_type"] == "BULLISH_SURGE" else "#ef4444"
                     st.markdown(
                         f'<div style="font-size:.7rem;padding:3px 0;border-bottom:1px solid #0f172a;">'
-                        f'<span style="color:{c};font-weight:600;">{row["asset"]}</span>'
-                        f'<span style="color:#334155;"> &nbsp;z={abs(float(row["z_score"])):.2f}&sigma;'
-                        f' &nbsp;{str(row["detected_at"])[:16]}</span></div>',
+                        f'<span style="color:{_sb_rc};font-weight:600;">{_sb_row["asset"]}</span>'
+                        f'<span style="color:#334155;"> &nbsp;z={abs(float(_sb_row["z_score"])):.2f}'
+                        f'&sigma; &nbsp;{str(_sb_row["detected_at"])[:16]}</span></div>',
                         unsafe_allow_html=True,
                     )
 
     st.divider()
 
-    st.markdown('<div class="section-title">Calendar Range</div>', unsafe_allow_html=True)
-    today = date.today()
-    from_d = st.date_input("From", value=today,                     key="from_d", label_visibility="collapsed")
-    to_d   = st.date_input("To",   value=today + timedelta(days=7), key="to_d",   label_visibility="collapsed")
+    # ── Time Range ─────────────────────────────────────────────────────────
+    st.markdown('<div class="section-title">Time Range</div>', unsafe_allow_html=True)
+    _today = date.today()
+    _t_mode = st.radio(
+        "Period",
+        ["Today", "This Week", "This Month", "Custom"],
+        index=1,
+        key="t_mode",
+        label_visibility="collapsed",
+    )
+    if _t_mode == "Today":
+        from_d = to_d = _today
+    elif _t_mode == "This Week":
+        from_d = _today - timedelta(days=_today.weekday())
+        to_d   = from_d + timedelta(days=6)
+    elif _t_mode == "This Month":
+        from_d = date(_today.year, _today.month, 1)
+        to_d   = _today
+    else:
+        from_d = st.date_input("From", value=_today,                     key="from_d", label_visibility="collapsed")
+        to_d   = st.date_input("To",   value=_today + timedelta(days=7), key="to_d",   label_visibility="collapsed")
 
+    # ── Currency Filter ────────────────────────────────────────────────────
+    st.markdown('<div class="section-title">Currency Filter</div>', unsafe_allow_html=True)
+    _sel_ccys: list[str] = st.multiselect(
+        "Currencies",
+        options=_ALL_CCYS,
+        default=_ALL_CCYS,
+        key="f_ccy",
+        label_visibility="collapsed",
+    )
+
+    # ── Impact Filter ──────────────────────────────────────────────────────
     st.markdown('<div class="section-title">Impact Filter</div>', unsafe_allow_html=True)
     show_high   = st.checkbox("High",   value=True,  key="f_h")
     show_medium = st.checkbox("Medium", value=True,  key="f_m")
     show_low    = st.checkbox("Low",    value=False, key="f_l")
+
+    # ── Alert Asset Filter ─────────────────────────────────────────────────
+    _watched_assets = _load_watched_assets()
+    _all_asset_names = [a["name"] for a in _watched_assets]
+    st.markdown('<div class="section-title">Alert Assets</div>', unsafe_allow_html=True)
+    _sel_assets: list[str] = st.multiselect(
+        "Assets",
+        options=_all_asset_names,
+        default=_all_asset_names,
+        key="f_assets",
+        label_visibility="collapsed",
+    )
 
     st.divider()
     if st.button("Refresh Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-    # ── Monitored assets ───────────────────────────────────────────────────
+    # ── Monitored assets panel ─────────────────────────────────────────────
     st.divider()
     st.markdown('<div class="section-title">Monitored Assets</div>', unsafe_allow_html=True)
-    _watched = _load_watched_assets()
     _class_colors = {
         "forex":     "#3b82f6",
         "index":     "#8b5cf6",
@@ -840,7 +882,7 @@ with st.sidebar:
         "commodity": "#22c55e",
         "equity":    "#64748b",
     }
-    for _a in _watched:
+    for _a in _watched_assets:
         _c = _class_colors.get(_a.get("class", ""), "#475569")
         st.markdown(
             f'<div style="display:flex;align-items:center;gap:7px;'
@@ -854,32 +896,90 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
     st.markdown(
-        f'<div style="font-size:.58rem;color:#334155;padding-top:5px;">'
-        f'Edit backend/assets.yaml to add or remove tickers.</div>',
+        '<div style="font-size:.58rem;color:#334155;padding-top:5px;">'
+        'Edit backend/assets.yaml to add or remove tickers.</div>',
         unsafe_allow_html=True,
     )
 
     st.divider()
-    key_c = "#22c55e" if FINNHUB_API_KEY else "#475569"
-    key_t = "FINNHUB KEY CONFIGURED" if FINNHUB_API_KEY else "NO FINNHUB KEY"
+    _key_c = "#22c55e" if FINNHUB_API_KEY else "#475569"
+    _key_t = "FINNHUB KEY CONFIGURED" if FINNHUB_API_KEY else "NO FINNHUB KEY"
     st.markdown(
-        f'<div style="font-size:.6rem;color:{key_c};letter-spacing:.06em;text-align:center;">'
-        f'{key_t}</div>',
+        f'<div style="font-size:.6rem;color:{_key_c};letter-spacing:.06em;text-align:center;">'
+        f'{_key_t}</div>',
         unsafe_allow_html=True,
     )
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POST-SIDEBAR: alert detection, filtered data, auto-refresh
+# ══════════════════════════════════════════════════════════════════════════════
+
+alerts_df = load_alerts()
+
+# Apply asset filter
+if _sel_assets and not alerts_df.empty:
+    alerts_df = alerts_df[alerts_df["asset"].isin(_sel_assets)].reset_index(drop=True)
+
+# Detect new spike → toast + audio ping
+if not alerts_df.empty:
+    _cur_ts = str(alerts_df.iloc[0]["detected_at"])
+    if st.session_state.last_alert_ts is not None and _cur_ts != st.session_state.last_alert_ts:
+        _al = alerts_df.iloc[0]
+        st.toast(
+            f"Spike detected: {_al['asset']} — {_al['spike_type'].replace('_', ' ')}",
+            icon="🚨",
+        )
+        # Web Audio API beep (880 Hz, 0.5 s) — works after first user interaction
+        st_html(
+            "<script>"
+            "(function(){"
+            "try{"
+            "var c=new(window.AudioContext||window.webkitAudioContext)();"
+            "var o=c.createOscillator();"
+            "var g=c.createGain();"
+            "o.connect(g);g.connect(c.destination);"
+            "o.type='sine';o.frequency.value=880;"
+            "g.gain.setValueAtTime(0.2,c.currentTime);"
+            "g.gain.exponentialRampToValueAtTime(0.001,c.currentTime+0.5);"
+            "o.start(c.currentTime);o.stop(c.currentTime+0.5);"
+            "}catch(e){}"
+            "})();"
+            "</script>"
+        )
+    st.session_state.last_alert_ts = _cur_ts
+
+# Auto-refresh every 30 s — keeps alert detection live between user interactions
+st_html("<script>setTimeout(function(){window.location.reload();},30000);</script>")
+
+# ── Filtered events (shared between Calendar tab and Export tab) ───────────────
+
+_raw_events, _data_source = load_events(from_d, to_d)
+
+_active_impacts: list[str] = (
+    (["high"]   if show_high   else []) +
+    (["medium"] if show_medium else []) +
+    (["low"]    if show_low    else [])
+)
+_active_ccys = set(_sel_ccys) if _sel_ccys else set(_ALL_CCYS)
+
+filtered_events: list[dict] = [
+    e for e in _raw_events
+    if e.get("impact_level") in _active_impacts
+    and e.get("currency") in _active_ccys
+]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN — Tabs
 # ══════════════════════════════════════════════════════════════════════════════
 
-tab_cal, tab_ai = st.tabs(["Economic Calendar", "Asset Intelligence"])
+tab_cal, tab_ai, tab_export = st.tabs(
+    ["Economic Calendar", "Asset Intelligence", "Export"]
+)
 
 # ── Tab 1: Economic Calendar ──────────────────────────────────────────────────
 
 with tab_cal:
-    events, _data_source = load_events(from_d, to_d)
-
     _src_colors = {
         "LIVE — Finnhub API":   "#22c55e",
         "LOCAL DB":             "#3b82f6",
@@ -897,17 +997,10 @@ with tab_cal:
         unsafe_allow_html=True,
     )
 
-    active_impacts: list[str] = (
-        (["high"]   if show_high   else []) +
-        (["medium"] if show_medium else []) +
-        (["low"]    if show_low    else [])
-    )
-    events = [e for e in events if e.get("impact_level") in active_impacts]
-
-    if not events:
+    if not filtered_events:
         st.info(
-            "No economic events found for the selected date range and filters. "
-            "Configure FINNHUB_API_KEY in backend/.env to enable live calendar data."
+            "No economic events match the current filters. "
+            "Try widening the time range, impact filter, or currency selection."
         )
     else:
         st.markdown(
@@ -925,7 +1018,7 @@ with tab_cal:
         )
 
         by_date: dict[str, list[dict]] = {}
-        for ev in events:
+        for ev in filtered_events:
             d = _parse_date(str(ev.get("timestamp", "")))
             by_date.setdefault(d, []).append(ev)
 
@@ -1150,6 +1243,103 @@ with tab_ai:
                     f'</div></div>',
                     unsafe_allow_html=True,
                 )
+
+
+# ── Tab 3: Export ─────────────────────────────────────────────────────────────
+
+with tab_export:
+    st.markdown('<div class="pg-header">Export</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div style="font-size:.72rem;color:#64748b;margin-bottom:18px;">'
+        'Downloads reflect the currently active filters '
+        '(time range, currency, impact level, asset selection).'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    exp_c1, exp_c2 = st.columns(2)
+
+    # ── Events CSV ────────────────────────────────────────────────────────
+    with exp_c1:
+        st.markdown(
+            '<div class="section-title">Economic Events</div>',
+            unsafe_allow_html=True,
+        )
+        if filtered_events:
+            _ev_rows = []
+            for _ev in filtered_events:
+                _sc = _scenario_matrix(_ev.get("event_name", ""), _ev.get("currency", "USD"))
+                _ev_rows.append({
+                    "Timestamp (UTC)":    _ev.get("timestamp", ""),
+                    "Event":              _ev.get("event_name", ""),
+                    "Country":            _ev.get("country", ""),
+                    "Currency":           _ev.get("currency", ""),
+                    "Impact":             _ev.get("impact_level", ""),
+                    "Actual":             _ev.get("actual", ""),
+                    "Forecast":           _ev.get("forecast", ""),
+                    "Previous":           _ev.get("previous", ""),
+                    "Unit":               _ev.get("unit", ""),
+                    "SC1_Label":          _sc[0]["label"] if len(_sc) > 0 else "",
+                    "SC1_Trigger":        _sc[0]["trigger"] if len(_sc) > 0 else "",
+                    "SC1_Reaction":       _sc[0]["market_reaction"] if len(_sc) > 0 else "",
+                    "SC3_Label":          _sc[2]["label"] if len(_sc) > 2 else "",
+                    "SC3_Trigger":        _sc[2]["trigger"] if len(_sc) > 2 else "",
+                    "SC3_Reaction":       _sc[2]["market_reaction"] if len(_sc) > 2 else "",
+                    "SC5_Label":          _sc[4]["label"] if len(_sc) > 4 else "",
+                    "SC5_Trigger":        _sc[4]["trigger"] if len(_sc) > 4 else "",
+                    "SC5_Reaction":       _sc[4]["market_reaction"] if len(_sc) > 4 else "",
+                })
+            _ev_df = pd.DataFrame(_ev_rows)
+            st.markdown(
+                f'<div style="font-size:.65rem;color:#475569;margin-bottom:8px;">'
+                f'{len(filtered_events)} event(s) — {from_d} to {to_d}</div>',
+                unsafe_allow_html=True,
+            )
+            st.download_button(
+                label="Download Events (CSV)",
+                data=_ev_df.to_csv(index=False),
+                file_name=f"market_pulse_events_{from_d}_{to_d}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        else:
+            st.caption("No events match current filters.")
+
+    # ── Alerts CSV ────────────────────────────────────────────────────────
+    with exp_c2:
+        st.markdown(
+            '<div class="section-title">Volatility Alerts</div>',
+            unsafe_allow_html=True,
+        )
+        if not alerts_df.empty:
+            st.markdown(
+                f'<div style="font-size:.65rem;color:#475569;margin-bottom:8px;">'
+                f'{len(alerts_df)} alert(s) — most recent {len(alerts_df)}</div>',
+                unsafe_allow_html=True,
+            )
+            _al_export = alerts_df.copy()
+            _al_export.columns = [c.replace("_", " ").title() for c in _al_export.columns]
+            st.download_button(
+                label="Download Alerts (CSV)",
+                data=_al_export.to_csv(index=False),
+                file_name="market_pulse_alerts.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        else:
+            st.caption("No alerts match current filters.")
+
+    st.divider()
+    st.markdown(
+        '<div style="font-size:.65rem;color:#334155;line-height:1.8;">'
+        '<strong>Events CSV columns:</strong> timestamp, event, country, currency, impact, '
+        'actual, forecast, previous, unit, plus scenario-matrix fields for the Extreme Hawkish, '
+        'Consensus, and Extreme Dovish cases (label, trigger, market reaction).<br>'
+        '<strong>Alerts CSV columns:</strong> id, asset, ticker, spike type, current price, '
+        'z-score, cause found, AI explanation, detected at.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
