@@ -1,0 +1,30 @@
+# Market Pulse Intelligence — Monitored Assets
+# ─────────────────────────────────────────────
+# Edit this file to add or remove tracked instruments.
+# The Volatility Monitor picks up changes on the next restart.
+#
+# Fields
+#   name    : display label shown in the dashboard and alert cards
+#   ticker  : yfinance symbol  (https://finance.yahoo.com → search → ticker)
+#   class   : forex | equity | index | crypto | commodity
+
+assets:
+  - name:   "EUR/USD"
+    ticker:  "EURUSD=X"
+    class:   "forex"
+
+  - name:   "S&P 500"
+    ticker:  "^GSPC"
+    class:   "index"
+
+  - name:   "USD Index"
+    ticker:  "DX-Y.NYB"
+    class:   "index"
+
+  - name:   "Bitcoin"
+    ticker:  "BTC-USD"
+    class:   "crypto"
+
+  - name:   "Gold"
+    ticker:  "GC=F"
+    class:   "commodity"

@@ -1,14 +1,22 @@
 """
-VolatilityMonitor — background asyncio.Task that watches key USD-correlated
+VolatilityMonitor — background asyncio.Task that watches configured
 assets for abnormal price moves and fires AI-powered spike explanations.
+
+Asset list
+──────────
+  Loaded at startup from  backend/assets.yaml.
+  If the file is missing the monitor auto-generates it with five
+  defaults (EUR/USD, S&P 500, USD Index, Bitcoin, Gold) and continues.
+  Any yfinance-compatible ticker can be added to the YAML without
+  touching Python code.
 
 Data sources
 ────────────
   Primary  : yfinance (Yahoo Finance) via a thread executor (sync library)
   Fallback : built-in Brownian-motion simulator — activates automatically
              after FAIL_THRESHOLD consecutive fetch failures per asset.
-             Simulator injects controlled spikes so the full pipeline can be
-             exercised in network-restricted environments (e.g. Codespaces).
+             Simulator injects controlled spikes so the full pipeline can
+             be exercised in network-restricted environments.
              Simulated alerts are labelled "[SIM]" in logs and explanations.
 
 Spike detection
@@ -30,7 +38,10 @@ import logging
 import random
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 from app.core.ai_orchestrator import AIOrchestrator, get_ai_orchestrator
 from app.db import repository
@@ -38,41 +49,122 @@ from app.db.base import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
 
+# ── Config path ───────────────────────────────────────────────────────────────
+
+# backend/assets.yaml  (three dirs up from app/core/)
+_CONFIG_PATH = Path(__file__).parent.parent.parent / "assets.yaml"
+
 # ── Tunable constants ──────────────────────────────────────────────────────────
 
-POLL_INTERVAL = 60        # seconds between price checks
-WINDOW_SIZE = 15          # rolling window depth (one sample per poll)
-MIN_SAMPLES = 5           # minimum samples before spike detection is active
-SPIKE_THRESHOLD = 2.0     # |z-score| that declares a spike
-SPIKE_COOLDOWN = 300      # seconds before re-alerting the same asset
-FAIL_THRESHOLD = 3        # consecutive fetch failures before sim-mode activates
+POLL_INTERVAL    = 60    # seconds between price checks
+WINDOW_SIZE      = 15    # rolling window depth (one sample per poll)
+MIN_SAMPLES      = 5     # minimum samples before spike detection is active
+SPIKE_THRESHOLD  = 2.0   # |z-score| that declares a spike
+SPIKE_COOLDOWN   = 300   # seconds before re-alerting the same asset
+FAIL_THRESHOLD   = 3     # consecutive fetch failures before sim-mode activates
+SIM_SPIKE_PERIOD = 20    # inject a spike every N sim steps (after warmup)
 
-ASSETS: list[dict[str, str]] = [
-    {"name": "EUR/USD",   "ticker": "EURUSD=X"},
-    {"name": "S&P 500",   "ticker": "^GSPC"},
-    {"name": "USD Index", "ticker": "DX-Y.NYB"},
+# ── Default asset list (written to assets.yaml on first run) ──────────────────
+
+_DEFAULT_ASSETS: list[dict] = [
+    {"name": "EUR/USD",   "ticker": "EURUSD=X",  "class": "forex"},
+    {"name": "S&P 500",   "ticker": "^GSPC",      "class": "index"},
+    {"name": "USD Index", "ticker": "DX-Y.NYB",   "class": "index"},
+    {"name": "Bitcoin",   "ticker": "BTC-USD",    "class": "crypto"},
+    {"name": "Gold",      "ticker": "GC=F",       "class": "commodity"},
 ]
 
-# ── Simulation parameters (Brownian motion) ───────────────────────────────────
+# ── Simulator base prices and volatility per ticker ───────────────────────────
+# Used to seed the Brownian-motion fallback when yfinance is unreachable.
+# Any ticker NOT listed here gets a generic base=100, vol=0.5 fallback.
 
-_SIM_BASE: dict[str, float] = {
-    "EURUSD=X": 1.0850,
-    "^GSPC":    5300.0,
-    "DX-Y.NYB": 104.5,
+_SIM_DEFAULTS: dict[str, tuple[float, float]] = {
+    # ticker       base_price    vol_per_step
+    "EURUSD=X":  (1.0850,        0.0003),   # ~3 pips
+    "^GSPC":     (5_300.0,       8.0),      # ~8 S&P points
+    "DX-Y.NYB":  (104.5,         0.07),     # ~7 cents
+    "BTC-USD":   (95_000.0,      500.0),    # ~$500 per step
+    "GC=F":      (3_300.0,       5.0),      # ~$5 per step
 }
-# Typical 1-minute standard deviation per asset
-_SIM_VOL: dict[str, float] = {
-    "EURUSD=X": 0.0003,   # ~3 pips
-    "^GSPC":    8.0,       # ~8 S&P points
-    "DX-Y.NYB": 0.07,     # ~7 cents
-}
-# Stagger spike injection so not all assets fire at once
-_SIM_SPIKE_OFFSET: dict[str, int] = {
-    "EURUSD=X": 0,
-    "^GSPC":    5,
-    "DX-Y.NYB": 10,
-}
-SIM_SPIKE_PERIOD = 20     # inject a spike every N steps (after warmup)
+
+
+def _sim_base(ticker: str) -> float:
+    return _SIM_DEFAULTS.get(ticker, (100.0, 0.5))[0]
+
+
+def _sim_vol(ticker: str) -> float:
+    return _SIM_DEFAULTS.get(ticker, (100.0, 0.5))[1]
+
+
+# ── Config loader ─────────────────────────────────────────────────────────────
+
+def load_asset_config() -> list[dict]:
+    """
+    Load the asset list from assets.yaml.
+    Auto-creates the file with defaults if it doesn't exist.
+    Falls back to _DEFAULT_ASSETS if the file is unreadable.
+    """
+    if not _CONFIG_PATH.exists():
+        _write_default_config()
+
+    try:
+        with open(_CONFIG_PATH) as fh:
+            data = yaml.safe_load(fh)
+        assets: list[dict] = data.get("assets", [])
+        if not assets:
+            raise ValueError("assets list is empty in config")
+        logger.info(
+            "Loaded %d assets from %s: %s",
+            len(assets), _CONFIG_PATH.name,
+            ", ".join(a["ticker"] for a in assets),
+        )
+        return assets
+    except Exception as exc:
+        logger.warning(
+            "Could not load %s (%s) — using built-in defaults", _CONFIG_PATH, exc
+        )
+        return _DEFAULT_ASSETS
+
+
+def _write_default_config() -> None:
+    """Write the default assets.yaml so the user can customise it."""
+    content = """\
+# Market Pulse Intelligence — Monitored Assets
+# ─────────────────────────────────────────────
+# Edit this file to add or remove tracked instruments.
+# The Volatility Monitor picks up changes on the next restart.
+#
+# Fields
+#   name    : display label shown in the dashboard and alert cards
+#   ticker  : yfinance symbol  (https://finance.yahoo.com → search → ticker)
+#   class   : forex | equity | index | crypto | commodity
+
+assets:
+  - name:   "EUR/USD"
+    ticker:  "EURUSD=X"
+    class:   "forex"
+
+  - name:   "S&P 500"
+    ticker:  "^GSPC"
+    class:   "index"
+
+  - name:   "USD Index"
+    ticker:  "DX-Y.NYB"
+    class:   "index"
+
+  - name:   "Bitcoin"
+    ticker:  "BTC-USD"
+    class:   "crypto"
+
+  - name:   "Gold"
+    ticker:  "GC=F"
+    class:   "commodity"
+"""
+    try:
+        _CONFIG_PATH.write_text(content)
+        logger.info("Created default asset config at %s", _CONFIG_PATH)
+    except Exception as exc:
+        logger.warning("Could not write default config: %s", exc)
 
 
 # ── yfinance price fetch (sync — runs in executor) ────────────────────────────
@@ -101,20 +193,38 @@ class VolatilityMonitor:
     def __init__(self, orchestrator: AIOrchestrator | None = None) -> None:
         self._orchestrator = orchestrator or get_ai_orchestrator()
 
-        # Rolling price windows
+        # Load asset list from config (or auto-generate + use defaults)
+        self._assets: list[dict] = load_asset_config()
+
+        # Rolling price windows — one deque per ticker
         self._windows: dict[str, deque[float]] = {
-            a["ticker"]: deque(maxlen=WINDOW_SIZE) for a in ASSETS
+            a["ticker"]: deque(maxlen=WINDOW_SIZE) for a in self._assets
         }
         # Cooldown: epoch timestamp of last spike per ticker
         self._last_spike: dict[str, float] = {}
         # Consecutive fetch failures per ticker
-        self._failures: dict[str, int] = {a["ticker"]: 0 for a in ASSETS}
-        # Simulation state
-        self._sim_prices: dict[str, float] = {k: v for k, v in _SIM_BASE.items()}
-        self._sim_steps: dict[str, int] = {k: 0 for k in _SIM_BASE}
+        self._failures: dict[str, int] = {a["ticker"]: 0 for a in self._assets}
+        # Simulation state — seeded from known base prices
+        self._sim_prices: dict[str, float] = {
+            a["ticker"]: _sim_base(a["ticker"]) for a in self._assets
+        }
+        self._sim_steps: dict[str, int] = {
+            a["ticker"]: 0 for a in self._assets
+        }
+        # Stagger spike injection offsets so assets don't all fire at once
+        self._sim_spike_offset: dict[str, int] = {
+            a["ticker"]: idx * 5 for idx, a in enumerate(self._assets)
+        }
 
         self._task: asyncio.Task[Any] | None = None
         self._running = False
+
+    # ── Public properties ─────────────────────────────────────────────────────
+
+    @property
+    def assets(self) -> list[dict]:
+        """The currently monitored asset list (from assets.yaml)."""
+        return self._assets
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -126,8 +236,9 @@ class VolatilityMonitor:
             self._loop(), name="volatility-monitor"
         )
         logger.info(
-            "VolatilityMonitor started (poll=%ds, threshold=%.1fσ, cooldown=%ds)",
-            POLL_INTERVAL, SPIKE_THRESHOLD, SPIKE_COOLDOWN,
+            "VolatilityMonitor started — %d assets (poll=%ds, threshold=%.1fσ, cooldown=%ds): %s",
+            len(self._assets), POLL_INTERVAL, SPIKE_THRESHOLD, SPIKE_COOLDOWN,
+            ", ".join(a["ticker"] for a in self._assets),
         )
 
     async def stop(self) -> None:
@@ -161,7 +272,7 @@ class VolatilityMonitor:
 
     async def _check_all_assets(self) -> None:
         loop = asyncio.get_event_loop()
-        for asset in ASSETS:
+        for asset in self._assets:
             ticker = asset["ticker"]
             try:
                 price = await loop.run_in_executor(None, _fetch_price, ticker)
@@ -181,18 +292,17 @@ class VolatilityMonitor:
     def _next_sim_price(self, ticker: str) -> float:
         """Advance the Brownian-motion simulator one step; inject spikes periodically."""
         current = self._sim_prices[ticker]
-        base = _SIM_BASE[ticker]
-        vol = _SIM_VOL[ticker]
-        step = self._sim_steps[ticker]
-        offset = _SIM_SPIKE_OFFSET.get(ticker, 0)
+        base    = _sim_base(ticker)
+        vol     = _sim_vol(ticker)
+        step    = self._sim_steps[ticker]
+        offset  = self._sim_spike_offset.get(ticker, 0)
         self._sim_steps[ticker] = step + 1
 
         # Gentle mean-reversion towards base price
         reversion = 0.05 * (base - current)
-        noise = random.gauss(0, vol)
+        noise     = random.gauss(0, vol)
 
-        # Spike injection: first spike after (MIN_SAMPLES + 2 + offset) steps,
-        # then every SIM_SPIKE_PERIOD steps
+        # Spike injection: first at (MIN_SAMPLES + 2 + offset), then every SIM_SPIKE_PERIOD
         effective_step = step - (MIN_SAMPLES + 2 + offset)
         if effective_step >= 0 and effective_step % SIM_SPIKE_PERIOD == 0:
             direction = random.choice([-1, 1])
@@ -203,7 +313,7 @@ class VolatilityMonitor:
         self._sim_prices[ticker] = new_price
         return new_price
 
-    async def _process_price(self, asset: dict[str, str], price: float) -> None:
+    async def _process_price(self, asset: dict, price: float) -> None:
         ticker = asset["ticker"]
         window = self._windows[ticker]
         window.append(price)
@@ -213,9 +323,9 @@ class VolatilityMonitor:
             logger.debug("%s warming up (%d/%d samples)", ticker, n, MIN_SAMPLES)
             return
 
-        mean = sum(window) / n
+        mean     = sum(window) / n
         variance = sum((p - mean) ** 2 for p in window) / n
-        std = variance ** 0.5
+        std      = variance ** 0.5
 
         if std < 1e-10:
             return  # flat price — no meaningful variance
@@ -237,7 +347,7 @@ class VolatilityMonitor:
 
         self._last_spike[ticker] = now
         spike_type = "BULLISH_SURGE" if z_score > 0 else "BEARISH_DROP"
-        simulated = self._failures.get(ticker, 0) >= FAIL_THRESHOLD
+        simulated  = self._failures.get(ticker, 0) >= FAIL_THRESHOLD
 
         logger.info(
             "SPIKE %s %s — z=%.2f price=%.5f%s",
@@ -248,7 +358,7 @@ class VolatilityMonitor:
 
     async def _handle_spike(
         self,
-        asset: dict[str, str],
+        asset: dict,
         price: float,
         z_score: float,
         spike_type: str,
@@ -264,8 +374,8 @@ class VolatilityMonitor:
 
         # ── 2. AI explanation ──────────────────────────────────────────────
         explanation: dict = {
-            "asset": asset["name"],
-            "spike_type": spike_type,
+            "asset":       asset["name"],
+            "spike_type":  spike_type,
             "cause_found": False,
             "explanation": "AI analysis pending.",
         }
@@ -282,9 +392,7 @@ class VolatilityMonitor:
             explanation["explanation"] = f"AI unavailable: {exc}"
 
         if simulated:
-            explanation["explanation"] = (
-                "[SIM] " + str(explanation.get("explanation", ""))
-            )
+            explanation["explanation"] = "[SIM] " + str(explanation.get("explanation", ""))
 
         # ── 3. Persist ─────────────────────────────────────────────────────
         try:

@@ -195,6 +195,29 @@ def _load_env() -> dict[str, str]:
 _ENV = _load_env()
 FINNHUB_API_KEY: str = _ENV.get("FINNHUB_API_KEY", "")
 
+_ASSETS_YAML = Path(__file__).parent / "assets.yaml"
+
+_DEFAULT_WATCHED: list[dict] = [
+    {"name": "EUR/USD",   "ticker": "EURUSD=X",  "class": "forex"},
+    {"name": "S&P 500",   "ticker": "^GSPC",      "class": "index"},
+    {"name": "USD Index", "ticker": "DX-Y.NYB",   "class": "index"},
+    {"name": "Bitcoin",   "ticker": "BTC-USD",    "class": "crypto"},
+    {"name": "Gold",      "ticker": "GC=F",       "class": "commodity"},
+]
+
+
+@st.cache_data(ttl=60)
+def _load_watched_assets() -> list[dict]:
+    """Read assets.yaml; return defaults if the file is absent or malformed."""
+    try:
+        import yaml
+        with open(_ASSETS_YAML) as fh:
+            data = yaml.safe_load(fh)
+        assets = data.get("assets", [])
+        return assets if assets else _DEFAULT_WATCHED
+    except Exception:
+        return _DEFAULT_WATCHED
+
 
 def _tofloat(v: Any) -> float | None:
     if v is None or v == "":
@@ -523,6 +546,37 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
+    # ── Monitored assets ───────────────────────────────────────────────────
+    st.divider()
+    st.markdown('<div class="section-title">Monitored Assets</div>', unsafe_allow_html=True)
+    _watched = _load_watched_assets()
+    _class_colors = {
+        "forex":     "#3b82f6",
+        "index":     "#8b5cf6",
+        "crypto":    "#f59e0b",
+        "commodity": "#22c55e",
+        "equity":    "#64748b",
+    }
+    for _a in _watched:
+        _c = _class_colors.get(_a.get("class", ""), "#475569")
+        st.markdown(
+            f'<div style="display:flex;align-items:center;gap:7px;'
+            f'padding:4px 0;border-bottom:1px solid #0f172a;">'
+            f'<span style="width:6px;height:6px;border-radius:50%;'
+            f'background:{_c};flex-shrink:0;display:inline-block;"></span>'
+            f'<span style="font-size:.72rem;color:#94a3b8;flex:1;">{_a.get("name","")}</span>'
+            f'<span style="font-size:.62rem;color:#475569;font-family:monospace;">'
+            f'{_a.get("ticker","")}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown(
+        f'<div style="font-size:.58rem;color:#334155;padding-top:5px;">'
+        f'Edit backend/assets.yaml to add or remove tickers.</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.divider()
     key_c = "#22c55e" if FINNHUB_API_KEY else "#475569"
     key_t = "FINNHUB KEY CONFIGURED" if FINNHUB_API_KEY else "NO FINNHUB KEY"
     st.markdown(
