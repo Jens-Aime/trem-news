@@ -357,6 +357,43 @@ def _events_from_db(from_d: str, to_d: str) -> list[dict]:
         return []
 
 
+@st.cache_data(ttl=1800)
+def load_asset_intelligence(ticker: str) -> dict:
+    """Fetch yfinance market data and analyst info. Returns {error: ...} on failure."""
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+
+        recs_df = None
+        try:
+            r = t.recommendations
+            if r is not None and not r.empty:
+                recs_df = r.head(8)
+        except Exception:
+            pass
+
+        return {
+            "name":         info.get("longName") or info.get("shortName", ticker),
+            "current_price": info.get("currentPrice") or info.get("regularMarketPrice"),
+            "prev_close":   info.get("previousClose") or info.get("regularMarketPreviousClose"),
+            "week52_high":  info.get("fiftyTwoWeekHigh"),
+            "week52_low":   info.get("fiftyTwoWeekLow"),
+            "target_mean":  info.get("targetMeanPrice"),
+            "target_high":  info.get("targetHighPrice"),
+            "target_low":   info.get("targetLowPrice"),
+            "rec_key":      (info.get("recommendationKey") or "").upper().replace("_", " "),
+            "rec_mean":     info.get("recommendationMean"),
+            "analyst_count": info.get("numberOfAnalystOpinions"),
+            "sector":       info.get("sector") or "",
+            "industry":     info.get("industry") or "",
+            "recommendations": recs_df,
+            "error":        None,
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
 @st.cache_data(ttl=10)
 def load_alerts() -> pd.DataFrame:
     if not DB_PATH.exists():
@@ -833,100 +870,286 @@ with st.sidebar:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN — Economic Calendar
+# MAIN — Tabs
 # ══════════════════════════════════════════════════════════════════════════════
 
-events, _data_source = load_events(from_d, to_d)
+tab_cal, tab_ai = st.tabs(["Economic Calendar", "Asset Intelligence"])
 
-_src_colors = {
-    "LIVE — Finnhub API":   "#22c55e",
-    "LOCAL DB":             "#3b82f6",
-    "GENERATED SCHEDULE":   "#f59e0b",
-    "NO DATA":              "#ef4444",
-}
-_src_c = _src_colors.get(_data_source, "#475569")
+# ── Tab 1: Economic Calendar ──────────────────────────────────────────────────
 
-st.markdown(
-    f'<div class="pg-header" style="display:flex;align-items:baseline;gap:14px;">'
-    f'<span>Economic Calendar</span>'
-    f'<span style="font-size:.58rem;color:{_src_c};letter-spacing:.1em;">'
-    f'DATA SOURCE: {_data_source}</span>'
-    f'</div>',
-    unsafe_allow_html=True,
-)
+with tab_cal:
+    events, _data_source = load_events(from_d, to_d)
 
-active_impacts: list[str] = (
-    (["high"]   if show_high   else []) +
-    (["medium"] if show_medium else []) +
-    (["low"]    if show_low    else [])
-)
-events = [e for e in events if e.get("impact_level") in active_impacts]
+    _src_colors = {
+        "LIVE — Finnhub API":   "#22c55e",
+        "LOCAL DB":             "#3b82f6",
+        "GENERATED SCHEDULE":   "#f59e0b",
+        "NO DATA":              "#ef4444",
+    }
+    _src_c = _src_colors.get(_data_source, "#475569")
 
-if not events:
-    st.info(
-        "No economic events found for the selected date range and filters. "
-        "Configure FINNHUB_API_KEY in backend/.env to enable live calendar data."
-    )
-else:
-    # Column header row
     st.markdown(
-        '<div class="cal-hdr">'
-        '<span>TIME (UTC)</span>'
-        '<span>EVENT</span>'
-        '<span>CCY</span>'
-        '<span>IMPACT</span>'
-        '<span>ACTUAL</span>'
-        '<span>FORECAST</span>'
-        '<span>PREVIOUS</span>'
-        '<span>STATUS</span>'
-        '</div>',
+        f'<div class="pg-header" style="display:flex;align-items:baseline;gap:14px;">'
+        f'<span>Economic Calendar</span>'
+        f'<span style="font-size:.58rem;color:{_src_c};letter-spacing:.1em;">'
+        f'DATA SOURCE: {_data_source}</span>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
-    # Group by calendar date
-    by_date: dict[str, list[dict]] = {}
-    for ev in events:
-        d = _parse_date(str(ev.get("timestamp", "")))
-        by_date.setdefault(d, []).append(ev)
+    active_impacts: list[str] = (
+        (["high"]   if show_high   else []) +
+        (["medium"] if show_medium else []) +
+        (["low"]    if show_low    else [])
+    )
+    events = [e for e in events if e.get("impact_level") in active_impacts]
 
-    for day, day_evs in sorted(by_date.items()):
-        try:
-            day_label = pd.Timestamp(day).strftime("%A, %d %B %Y").upper()
-        except Exception:
-            day_label = day
+    if not events:
+        st.info(
+            "No economic events found for the selected date range and filters. "
+            "Configure FINNHUB_API_KEY in backend/.env to enable live calendar data."
+        )
+    else:
+        st.markdown(
+            '<div class="cal-hdr">'
+            '<span>TIME (UTC)</span>'
+            '<span>EVENT</span>'
+            '<span>CCY</span>'
+            '<span>IMPACT</span>'
+            '<span>ACTUAL</span>'
+            '<span>FORECAST</span>'
+            '<span>PREVIOUS</span>'
+            '<span>STATUS</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
-        st.markdown(f'<div class="date-grp">{day_label}</div>', unsafe_allow_html=True)
+        by_date: dict[str, list[dict]] = {}
+        for ev in events:
+            d = _parse_date(str(ev.get("timestamp", "")))
+            by_date.setdefault(d, []).append(ev)
 
-        for ev in day_evs:
-            has_actual = ev.get("actual") is not None
-            row_cls    = "cal-row cal-row-past" if has_actual else "cal-row"
-            status_html = (
-                '<span class="s-rel">RELEASED</span>'
-                if has_actual
-                else '<span class="s-sched">SCHEDULED</span>'
+        for day, day_evs in sorted(by_date.items()):
+            try:
+                day_label = pd.Timestamp(day).strftime("%A, %d %B %Y").upper()
+            except Exception:
+                day_label = day
+
+            st.markdown(f'<div class="date-grp">{day_label}</div>', unsafe_allow_html=True)
+
+            for ev in day_evs:
+                has_actual = ev.get("actual") is not None
+                row_cls    = "cal-row cal-row-past" if has_actual else "cal-row"
+                status_html = (
+                    '<span class="s-rel">RELEASED</span>'
+                    if has_actual
+                    else '<span class="s-sched">SCHEDULED</span>'
+                )
+                unit = ev.get("unit") or ""
+
+                st.markdown(
+                    f'<div class="{row_cls}">'
+                    f'<span class="c-time">{_parse_time(str(ev.get("timestamp", "")))}</span>'
+                    f'<span class="c-event">{ev.get("event_name", "")}</span>'
+                    f'<span class="c-ccy">{ev.get("currency", "")}</span>'
+                    f'{_impact_html(ev.get("impact_level", "low"))}'
+                    f'<span class="c-act">{_fmt(ev.get("actual"),   unit)}</span>'
+                    f'<span class="c-fct">{_fmt(ev.get("forecast"), unit)}</span>'
+                    f'<span class="c-prv">{_fmt(ev.get("previous"), unit)}</span>'
+                    f'{status_html}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+                if ev.get("impact_level") in ("high", "medium"):
+                    with st.expander(f"Scenario Analysis — {ev.get('event_name', '')}"):
+                        _render_scenario_matrix(
+                            _scenario_matrix(ev.get("event_name", ""), ev.get("currency", "USD"))
+                        )
+
+# ── Tab 2: Asset Intelligence ─────────────────────────────────────────────────
+
+with tab_ai:
+    _ai_assets  = _load_watched_assets()
+    _ai_options = {a["name"]: a for a in _ai_assets}
+
+    st.markdown(
+        '<div class="pg-header">Asset Intelligence</div>',
+        unsafe_allow_html=True,
+    )
+
+    _sel_name = st.selectbox(
+        "Select asset",
+        options=list(_ai_options.keys()),
+        label_visibility="collapsed",
+    )
+
+    if _sel_name:
+        _sel    = _ai_options[_sel_name]
+        _ticker = _sel["ticker"]
+        _aclass = _sel.get("class", "")
+
+        with st.spinner(f"Loading market data for {_sel_name}…"):
+            _intel = load_asset_intelligence(_ticker)
+
+        if _intel.get("error"):
+            st.warning(
+                f"Market data unavailable for **{_sel_name}** (`{_ticker}`). "
+                f"This is expected when the environment blocks outbound finance APIs. "
+                f"Error: `{_intel['error']}`"
             )
-            unit = ev.get("unit") or ""
+        else:
+            _price   = _intel.get("current_price")
+            _prev    = _intel.get("prev_close")
+            _hi52    = _intel.get("week52_high")
+            _lo52    = _intel.get("week52_low")
 
-            st.markdown(
-                f'<div class="{row_cls}">'
-                f'<span class="c-time">{_parse_time(str(ev.get("timestamp", "")))}</span>'
-                f'<span class="c-event">{ev.get("event_name", "")}</span>'
-                f'<span class="c-ccy">{ev.get("currency", "")}</span>'
-                f'{_impact_html(ev.get("impact_level", "low"))}'
-                f'<span class="c-act">{_fmt(ev.get("actual"),   unit)}</span>'
-                f'<span class="c-fct">{_fmt(ev.get("forecast"), unit)}</span>'
-                f'<span class="c-prv">{_fmt(ev.get("previous"), unit)}</span>'
-                f'{status_html}'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+            _chg_pct: float | None = None
+            if _price is not None and _prev is not None and _prev != 0:
+                _chg_pct = (_price - _prev) / _prev * 100
 
-            # Scenario analysis — only for medium/high impact events
-            if ev.get("impact_level") in ("high", "medium"):
-                with st.expander(f"Scenario Analysis — {ev.get('event_name', '')}"):
-                    _render_scenario_matrix(
-                        _scenario_matrix(ev.get("event_name", ""), ev.get("currency", "USD"))
+            # Metric cards
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            with mc1:
+                st.metric(
+                    "Current Price",
+                    f"{_price:.5g}" if _price is not None else "N/A",
+                )
+            with mc2:
+                st.metric(
+                    "Daily Change",
+                    f"{_chg_pct:+.2f}%" if _chg_pct is not None else "N/A",
+                    delta=f"{_chg_pct:+.2f}%" if _chg_pct is not None else None,
+                )
+            with mc3:
+                st.metric("52W High", f"{_hi52:.5g}" if _hi52 is not None else "N/A")
+            with mc4:
+                st.metric("52W Low",  f"{_lo52:.5g}" if _lo52 is not None else "N/A")
+
+            # 52-week range progress bar
+            if _price is not None and _hi52 is not None and _lo52 is not None and _hi52 > _lo52:
+                _pct_pos = max(0.0, min(100.0, (_price - _lo52) / (_hi52 - _lo52) * 100))
+                st.markdown(
+                    f'<div style="margin:12px 0 16px;">'
+                    f'<div style="font-size:.58rem;color:#334155;letter-spacing:.1em;'
+                    f'text-transform:uppercase;margin-bottom:5px;">52-Week Position</div>'
+                    f'<div style="background:#1e293b;border-radius:4px;height:6px;position:relative;">'
+                    f'<div style="position:absolute;left:0;top:0;height:100%;'
+                    f'width:{_pct_pos:.1f}%;background:#3b82f6;border-radius:4px;"></div>'
+                    f'<div style="position:absolute;left:{_pct_pos:.1f}%;top:-3px;'
+                    f'transform:translateX(-50%);width:12px;height:12px;border-radius:50%;'
+                    f'background:#60a5fa;border:2px solid #0b0f19;"></div>'
+                    f'</div>'
+                    f'<div style="display:flex;justify-content:space-between;'
+                    f'font-size:.62rem;color:#475569;margin-top:5px;">'
+                    f'<span>{_lo52:.5g} (Low)</span>'
+                    f'<span style="color:#3b82f6;">{_pct_pos:.0f}% of range</span>'
+                    f'<span>{_hi52:.5g} (High)</span>'
+                    f'</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+            # Analyst consensus — only available for equities
+            _target_mean  = _intel.get("target_mean")
+            _rec_key      = _intel.get("rec_key", "")
+            _analyst_cnt  = _intel.get("analyst_count")
+            _recs_df      = _intel.get("recommendations")
+
+            if _target_mean is not None or _rec_key:
+                st.markdown('<div class="section-title">Analyst Consensus</div>', unsafe_allow_html=True)
+
+                _rec_colors = {
+                    "STRONG BUY":   "#16a34a",
+                    "BUY":          "#22c55e",
+                    "HOLD":         "#f59e0b",
+                    "UNDERPERFORM": "#ef4444",
+                    "SELL":         "#dc2626",
+                    "STRONG SELL":  "#991b1b",
+                }
+                _rc = _rec_colors.get(_rec_key, "#64748b")
+                _cnt_str = f"{_analyst_cnt} analysts" if _analyst_cnt else ""
+
+                ac1, ac2, ac3 = st.columns(3)
+                with ac1:
+                    st.markdown(
+                        f'<div style="padding:14px;background:#111827;border-radius:6px;'
+                        f'border-left:3px solid {_rc};height:100%;">'
+                        f'<div style="font-size:.55rem;color:#334155;letter-spacing:.1em;'
+                        f'text-transform:uppercase;margin-bottom:6px;">Consensus Rating</div>'
+                        f'<div style="font-size:1.15rem;font-weight:700;color:{_rc};">'
+                        f'{_rec_key or "N/A"}</div>'
+                        f'<div style="font-size:.62rem;color:#475569;margin-top:4px;">'
+                        f'{_cnt_str}</div>'
+                        f'</div>',
+                        unsafe_allow_html=True,
                     )
+                with ac2:
+                    if _target_mean is not None:
+                        _upside: float | None = None
+                        if _price is not None and _price != 0:
+                            _upside = (_target_mean - _price) / _price * 100
+                        _up_str = f" ({_upside:+.1f}%)" if _upside is not None else ""
+                        _up_col = "#22c55e" if (_upside or 0) >= 0 else "#ef4444"
+                        st.markdown(
+                            f'<div style="padding:14px;background:#111827;border-radius:6px;height:100%;">'
+                            f'<div style="font-size:.55rem;color:#334155;letter-spacing:.1em;'
+                            f'text-transform:uppercase;margin-bottom:6px;">Price Target (Mean)</div>'
+                            f'<div style="font-size:1.15rem;font-weight:700;color:#cbd5e1;">'
+                            f'{_target_mean:.4g}</div>'
+                            f'<div style="font-size:.62rem;color:{_up_col};margin-top:4px;">'
+                            f'{_up_str.strip()}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+                with ac3:
+                    _thi = _intel.get("target_high")
+                    _tlo = _intel.get("target_low")
+                    if _thi is not None or _tlo is not None:
+                        st.markdown(
+                            f'<div style="padding:14px;background:#111827;border-radius:6px;height:100%;">'
+                            f'<div style="font-size:.55rem;color:#334155;letter-spacing:.1em;'
+                            f'text-transform:uppercase;margin-bottom:6px;">Target Range</div>'
+                            f'<div style="font-size:.9rem;font-weight:600;">'
+                            f'<span style="color:#22c55e">{_thi:.4g if _thi else "—"}</span>'
+                            f'<span style="color:#334155;margin:0 5px;">/</span>'
+                            f'<span style="color:#ef4444">{_tlo:.4g if _tlo else "—"}</span>'
+                            f'</div>'
+                            f'<div style="font-size:.58rem;color:#334155;margin-top:5px;">High / Low</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                if _recs_df is not None and not _recs_df.empty:
+                    st.markdown(
+                        '<div class="section-title" style="margin-top:14px;">Recent Analyst Ratings</div>',
+                        unsafe_allow_html=True,
+                    )
+                    try:
+                        _disp = _recs_df.reset_index()
+                        _cols = [c for c in _disp.columns if c not in ("index",)]
+                        st.dataframe(_disp[_cols], use_container_width=True, hide_index=True)
+                    except Exception:
+                        st.dataframe(_recs_df, use_container_width=True)
+            else:
+                _class_labels = {
+                    "forex": "currency pair",
+                    "crypto": "cryptocurrency",
+                    "commodity": "commodity",
+                    "index": "market index",
+                }
+                _cl = _class_labels.get(_aclass, "instrument")
+                st.markdown(
+                    f'<div style="padding:14px 16px;background:#111827;border-radius:6px;'
+                    f'border-left:3px solid #1e293b;margin-top:8px;">'
+                    f'<div style="font-size:.7rem;color:#64748b;line-height:1.7;">'
+                    f'Sell-side analyst consensus is not published for this {_cl}. '
+                    f'Price metrics and 52-week range are shown above.<br>'
+                    f'To see equity-level analyst data, add stock tickers '
+                    f'(e.g. <code>AAPL</code>, <code>MSFT</code>) to '
+                    f'<code>backend/assets.yaml</code>.'
+                    f'</div></div>',
+                    unsafe_allow_html=True,
+                )
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
