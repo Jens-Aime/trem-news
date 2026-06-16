@@ -1,5 +1,10 @@
 """
-Thin async HTTP wrapper around Finnhub's Economic Calendar endpoint.
+Async HTTP wrapper around the Finnhub Economic Calendar endpoint.
+
+Note: the /calendar/economic endpoint requires a Finnhub Premium plan.
+On a free-tier key the API returns HTTP 403.  When that happens the
+client returns an empty list; callers should fall back to the built-in
+calendar_generator instead of treating the empty list as "no events".
 
 Endpoint reference:
   GET /api/v1/calendar/economic

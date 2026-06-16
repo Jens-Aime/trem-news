@@ -9,6 +9,7 @@ Start command:
 """
 
 import sqlite3
+import sys
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,11 @@ from typing import Any
 import httpx
 import pandas as pd
 import streamlit as st
+
+# Allow importing from the backend app package when running as a script
+_BACKEND = Path(__file__).parent
+if str(_BACKEND) not in sys.path:
+    sys.path.insert(0, str(_BACKEND))
 
 # ── Page config ───────────────────────────────────────────────────────────────
 
@@ -235,7 +241,16 @@ def _impact_html(level: str) -> str:
 # ── Data loaders ──────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=300)
-def load_events(from_d: date, to_d: date) -> list[dict]:
+def load_events(from_d: date, to_d: date) -> tuple[list[dict], str]:
+    """
+    Return (events, source_label).
+
+    Priority:
+      1. Finnhub API — live data with actual/forecast values (requires Premium key)
+      2. Local SQLite DB — previously ingested events
+      3. Built-in calendar generator — recurring schedule, always available
+    """
+    # ── 1. Finnhub (live) ──────────────────────────────────────────────────────
     if FINNHUB_API_KEY:
         try:
             r = httpx.get(
@@ -243,12 +258,27 @@ def load_events(from_d: date, to_d: date) -> list[dict]:
                 params={"from": str(from_d), "to": str(to_d), "token": FINNHUB_API_KEY},
                 timeout=10,
             )
-            r.raise_for_status()
-            raw: list[dict] = r.json().get("economicCalendar", [])
-            return _normalize_finnhub(raw)
+            if r.status_code in (401, 403):
+                pass  # free-tier restriction — fall through silently
+            else:
+                r.raise_for_status()
+                raw: list[dict] = r.json().get("economicCalendar", [])
+                if raw:
+                    return _normalize_finnhub(raw), "LIVE — Finnhub API"
         except Exception:
             pass
-    return _events_from_db(str(from_d), str(to_d))
+
+    # ── 2. Local DB ────────────────────────────────────────────────────────────
+    db_events = _events_from_db(str(from_d), str(to_d))
+    if db_events:
+        return db_events, "LOCAL DB"
+
+    # ── 3. Built-in calendar generator ────────────────────────────────────────
+    try:
+        from app.ingestion.calendar_generator import generate_events
+        return generate_events(from_d, to_d), "GENERATED SCHEDULE"
+    except Exception:
+        return [], "NO DATA"
 
 
 def _normalize_finnhub(raw: list[dict]) -> list[dict]:
@@ -493,12 +523,11 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-    live  = bool(FINNHUB_API_KEY)
-    src_c = "#22c55e" if live else "#475569"
-    src_t = "LIVE — Finnhub API" if live else "OFFLINE — Local Database"
+    key_c = "#22c55e" if FINNHUB_API_KEY else "#475569"
+    key_t = "FINNHUB KEY CONFIGURED" if FINNHUB_API_KEY else "NO FINNHUB KEY"
     st.markdown(
-        f'<div style="font-size:.6rem;color:{src_c};letter-spacing:.06em;text-align:center;">'
-        f'{src_t}</div>',
+        f'<div style="font-size:.6rem;color:{key_c};letter-spacing:.06em;text-align:center;">'
+        f'{key_t}</div>',
         unsafe_allow_html=True,
     )
 
@@ -507,10 +536,24 @@ with st.sidebar:
 # MAIN — Economic Calendar
 # ══════════════════════════════════════════════════════════════════════════════
 
-st.markdown('<div class="pg-header">Economic Calendar</div>', unsafe_allow_html=True)
+events, _data_source = load_events(from_d, to_d)
 
-# Load and filter events
-events = load_events(from_d, to_d)
+_src_colors = {
+    "LIVE — Finnhub API":   "#22c55e",
+    "LOCAL DB":             "#3b82f6",
+    "GENERATED SCHEDULE":   "#f59e0b",
+    "NO DATA":              "#ef4444",
+}
+_src_c = _src_colors.get(_data_source, "#475569")
+
+st.markdown(
+    f'<div class="pg-header" style="display:flex;align-items:baseline;gap:14px;">'
+    f'<span>Economic Calendar</span>'
+    f'<span style="font-size:.58rem;color:{_src_c};letter-spacing:.1em;">'
+    f'DATA SOURCE: {_data_source}</span>'
+    f'</div>',
+    unsafe_allow_html=True,
+)
 
 active_impacts: list[str] = (
     (["high"]   if show_high   else []) +
