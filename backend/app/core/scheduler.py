@@ -34,7 +34,8 @@ from cachetools import TTLCache
 
 from app.core.ai_orchestrator import AIOrchestrator, get_ai_orchestrator
 from app.core.config import Settings, get_settings
-from app.core.event_store import get_event_store
+from app.db import repository
+from app.db.base import AsyncSessionLocal
 from app.core.websocket_manager import (
     ConnectionManager,
     WSMessage,
@@ -206,7 +207,16 @@ class EventScheduler:
             try:
                 processed = preprocess_event(raw)
                 result = await self._orchestrator.analyze(processed)
-                get_event_store().append(result)
+
+                # Persist to database (best-effort — never crashes the loop)
+                try:
+                    async with AsyncSessionLocal() as session:
+                        await repository.save_analysis(session, processed, result)
+                        await session.commit()
+                except Exception as db_exc:
+                    logger.warning(
+                        "DB persist failed for event %s: %s", event_id, db_exc
+                    )
 
                 if self._manager.connection_count() > 0:
                     msg = WSMessage(

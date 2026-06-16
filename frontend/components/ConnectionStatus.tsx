@@ -6,6 +6,7 @@ interface ConnectionStatusProps {
   status: ConnectionStatus;
   clientId: string | null;
   reconnectAttempt: number;
+  mode?: "ws" | "polling";
 }
 
 const STATUS_CONFIG: Record<
@@ -38,6 +39,7 @@ export function ConnectionStatusBadge({
   status,
   clientId,
   reconnectAttempt,
+  mode,
 }: ConnectionStatusProps) {
   const cfg = STATUS_CONFIG[status];
 
@@ -63,6 +65,12 @@ export function ConnectionStatusBadge({
             reconnect #{reconnectAttempt}
           </span>
         )}
+
+      {mode === "polling" && (
+        <span className="rounded border border-amber-800/50 bg-amber-950/40 px-2 py-0.5 text-xs text-amber-500">
+          polling
+        </span>
+      )}
     </div>
   );
 }

@@ -36,3 +36,25 @@ export type ConnectionStatus =
   | "connected"
   | "disconnected"
   | "error";
+
+/** Superset of AnalysisResult — includes the underlying economic event fields. */
+export interface HistoryEntry extends AnalysisResult {
+  event_name: string;
+  country: string;
+  currency: string;
+  event_timestamp: string;
+  impact_level: string;
+  actual: number | null;
+  forecast: number | null;
+  previous: number | null;
+  unit: string | null;
+  surprise_pct: number | null;
+}
+
+export interface HistoryResponse {
+  items: HistoryEntry[];
+  total: number;
+  page: number;
+  page_size: number;
+  pages: number;
+}

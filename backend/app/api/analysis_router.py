@@ -1,16 +1,21 @@
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.ai_orchestrator import AIAnalysisError, AIOrchestrator, get_ai_orchestrator
-from app.core.event_store import get_event_store
 from app.core.websocket_manager import (
     ConnectionManager,
     WSMessage,
     WSMessageType,
     get_connection_manager,
 )
+from app.db import repository
+from app.db.base import get_db
 from app.models import AnalysisResult, ProcessedEvent
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -19,6 +24,7 @@ _get_orchestrator = get_ai_orchestrator
 
 OrchestratorDep = Annotated[AIOrchestrator, Depends(get_ai_orchestrator)]
 ManagerDep = Annotated[ConnectionManager, Depends(get_connection_manager)]
+DbDep = Annotated[AsyncSession, Depends(get_db)]
 
 
 @router.post("/analyse", response_model=AnalysisResult)
@@ -26,21 +32,28 @@ async def analyse_event(
     processed_event: ProcessedEvent,
     orchestrator: OrchestratorDep,
     manager: ManagerDep,
+    session: DbDep,
 ) -> AnalysisResult:
     """
     Analyse a pre-processed economic event via the configured AI provider.
 
-    After a successful analysis the result is automatically broadcast to all
-    connected WebSocket clients so the trading UI updates in real-time.
+    Persists the result to the database and broadcasts to all connected
+    WebSocket clients so the trading UI updates in real-time.
     """
     try:
         result = await orchestrator.analyze(processed_event)
     except AIAnalysisError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    get_event_store().append(result)
+    # Persist to database (best-effort — never blocks the HTTP response)
+    try:
+        await repository.save_analysis(session, processed_event, result)
+        await session.commit()
+    except Exception as exc:
+        logger.warning("DB persist failed for event %s: %s", result.event_id, exc)
+        await session.rollback()
 
-    # Push to all connected WS clients (fire-and-forget; never blocks the HTTP response)
+    # Broadcast to all connected WS clients (fire-and-forget)
     if manager.connection_count() > 0:
         msg = WSMessage(
             type=WSMessageType.ANALYSIS_RESULT,

@@ -80,3 +80,45 @@ export function formatSurprisePct(pct: number | null | undefined): string | null
 export function formatSector(sector: string): string {
   return sector.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+export function formatEventDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString("en-GB", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "UTC",
+      timeZoneName: "short",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+// ── URL resolution (works in both SSR and browser) ───────────────────────────
+
+const WS_PATH = "/ws/market-pulse";
+
+/** Resolve the backend WebSocket URL at runtime. */
+export function resolveWsUrl(): string {
+  if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
+  if (typeof window === "undefined") return `ws://localhost:8000${WS_PATH}`;
+  const { hostname, protocol } = window.location;
+  if (hostname === "localhost" || hostname === "127.0.0.1")
+    return `ws://localhost:8000${WS_PATH}`;
+  // Codespaces: replace embedded frontend port with backend port
+  const wsScheme = protocol === "https:" ? "wss:" : "ws:";
+  return `${wsScheme}//${hostname.replace(/-\d+\./, "-8000.")}${WS_PATH}`;
+}
+
+/** Resolve the backend HTTP base URL (no trailing slash) at runtime. */
+export function resolveApiBase(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
+  if (typeof window === "undefined") return "http://localhost:8000";
+  const { hostname, protocol } = window.location;
+  if (hostname === "localhost" || hostname === "127.0.0.1")
+    return "http://localhost:8000";
+  const httpScheme = protocol === "https:" ? "https:" : "http:";
+  return `${httpScheme}//${hostname.replace(/-\d+\./, "-8000.")}`;
+}

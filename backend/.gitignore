@@ -9,3 +9,5 @@ dist/
 build/
 .pytest_cache/
 .mypy_cache/
+marketpulse.db
+test_marketpulse.db
