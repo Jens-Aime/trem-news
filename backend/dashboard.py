@@ -37,6 +37,8 @@ st.set_page_config(
 DB_PATH      = Path(__file__).parent / "marketpulse.db"
 ENV_PATH     = Path(__file__).parent / ".env"
 FINNHUB_BASE = "https://finnhub.io/api/v1"
+FF_CALENDAR  = "https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.json"
+FRED_CSV     = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 
 _IMPACT_MAP: dict[str, str] = {"1": "low", "2": "medium", "3": "high"}
 _CCY_MAP: dict[str, str] = {
@@ -200,7 +202,8 @@ def _load_env() -> dict[str, str]:
 
 
 _ENV = _load_env()
-FINNHUB_API_KEY: str = _ENV.get("FINNHUB_API_KEY", "")
+FINNHUB_API_KEY: str        = _ENV.get("FINNHUB_API_KEY", "")
+TRADING_ECONOMICS_KEY: str  = _ENV.get("TRADING_ECONOMICS_API_KEY", "")
 
 _ASSETS_YAML = Path(__file__).parent / "assets.yaml"
 
@@ -291,9 +294,11 @@ def load_events(from_d: date, to_d: date) -> tuple[list[dict], str]:
     Return (events, source_label).
 
     Priority:
-      1. Finnhub API — live data with actual/forecast values (requires Premium key)
-      2. Local SQLite DB — previously ingested events
-      3. Built-in calendar generator — recurring schedule, always available
+      1. Finnhub API — live (requires Premium key)
+      2. ForexFactory CDN — free live calendar, no key required
+      3. Trading Economics — free tier (set TRADING_ECONOMICS_API_KEY in .env)
+      4. Local SQLite DB — previously ingested events
+      5. Built-in calendar generator — recurring schedule, always available
     """
     # ── 1. Finnhub (live) ──────────────────────────────────────────────────────
     if FINNHUB_API_KEY:
@@ -304,7 +309,7 @@ def load_events(from_d: date, to_d: date) -> tuple[list[dict], str]:
                 timeout=10,
             )
             if r.status_code in (401, 403):
-                pass  # free-tier restriction — fall through silently
+                pass
             else:
                 r.raise_for_status()
                 raw: list[dict] = r.json().get("economicCalendar", [])
@@ -313,12 +318,39 @@ def load_events(from_d: date, to_d: date) -> tuple[list[dict], str]:
         except Exception:
             pass
 
-    # ── 2. Local DB ────────────────────────────────────────────────────────────
+    # ── 2. ForexFactory CDN (free, no key, current week) ──────────────────────
+    try:
+        r = httpx.get(FF_CALENDAR, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        ff_raw = r.json()
+        if ff_raw:
+            ff_events = _normalize_forexfactory(ff_raw, from_d, to_d)
+            if ff_events:
+                return ff_events, "LIVE — ForexFactory"
+    except Exception:
+        pass
+
+    # ── 3. Trading Economics (optional key) ───────────────────────────────────
+    if TRADING_ECONOMICS_KEY:
+        try:
+            r = httpx.get(
+                "https://api.tradingeconomics.com/calendar",
+                params={"c": TRADING_ECONOMICS_KEY, "d1": str(from_d), "d2": str(to_d)},
+                timeout=10,
+            )
+            r.raise_for_status()
+            te_raw = r.json()
+            if te_raw:
+                return _normalize_trading_economics(te_raw), "LIVE — Trading Economics"
+        except Exception:
+            pass
+
+    # ── 4. Local DB ────────────────────────────────────────────────────────────
     db_events = _events_from_db(str(from_d), str(to_d))
     if db_events:
         return db_events, "LOCAL DB"
 
-    # ── 3. Built-in calendar generator ────────────────────────────────────────
+    # ── 5. Built-in calendar generator ────────────────────────────────────────
     try:
         from app.ingestion.calendar_generator import generate_events
         return generate_events(from_d, to_d), "GENERATED SCHEDULE"
@@ -344,6 +376,53 @@ def _normalize_finnhub(raw: list[dict]) -> list[dict]:
             "forecast":     _tofloat(r.get("estimate")),
             "previous":     _tofloat(r.get("prev")),
             "unit":         u,
+        })
+    return out
+
+
+def _normalize_forexfactory(raw: list[dict], from_d: date, to_d: date) -> list[dict]:
+    """Normalize ForexFactory CDN calendar data and filter to requested date range."""
+    _impact = {"High": "high", "Medium": "medium", "Low": "low", "Holiday": "low"}
+    out = []
+    for idx, r in enumerate(raw):
+        try:
+            ts = pd.Timestamp(r.get("date", ""))
+        except Exception:
+            continue
+        ev_date = date(ts.year, ts.month, ts.day)
+        if not (from_d <= ev_date <= to_d):
+            continue
+        out.append({
+            "event_id":     f"ff-{idx}",
+            "event_name":   r.get("title", ""),
+            "country":      r.get("country", ""),
+            "currency":     r.get("country", "USD"),
+            "timestamp":    str(ts),
+            "impact_level": _impact.get(r.get("impact", ""), "low"),
+            "actual":       _tofloat(r.get("actual")),
+            "forecast":     _tofloat(r.get("forecast")),
+            "previous":     _tofloat(r.get("previous")),
+            "unit":         "",
+        })
+    return out
+
+
+def _normalize_trading_economics(raw: list[dict]) -> list[dict]:
+    """Normalize Trading Economics calendar API response."""
+    _impact = {"1": "low", "2": "medium", "3": "high"}
+    out = []
+    for idx, r in enumerate(raw):
+        out.append({
+            "event_id":     r.get("CalendarId") or f"te-{idx}",
+            "event_name":   r.get("Category") or r.get("Event", ""),
+            "country":      r.get("Country", ""),
+            "currency":     r.get("Currency", "USD"),
+            "timestamp":    r.get("Date") or r.get("DateTime", ""),
+            "impact_level": _impact.get(str(r.get("Importance", "")), "medium"),
+            "actual":       _tofloat(r.get("Actual")),
+            "forecast":     _tofloat(r.get("Forecast") or r.get("TEForecast")),
+            "previous":     _tofloat(r.get("Previous")),
+            "unit":         r.get("Unit", ""),
         })
     return out
 
@@ -408,6 +487,99 @@ def load_asset_intelligence(ticker: str) -> dict:
         }
     except Exception as exc:
         return {"error": str(exc)}
+
+
+@st.cache_data(ttl=3600)
+def _fetch_fred_series(series_id: str) -> float | None:
+    """Fetch the latest value from FRED (free, no API key required)."""
+    try:
+        r = httpx.get(
+            f"{FRED_CSV}?id={series_id}",
+            timeout=8,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        for line in reversed(r.text.strip().splitlines()):
+            parts = line.split(",")
+            if len(parts) >= 2 and parts[1].strip() not in ("", "."):
+                return float(parts[1].strip())
+    except Exception:
+        pass
+    return None
+
+
+@st.cache_data(ttl=900)
+def load_fomc_probabilities() -> dict:
+    """
+    Calculate FOMC rate-decision scenario probabilities from 30-Day Fed Funds Futures (ZQ=F).
+    Mirrors CME FedWatch methodology: futures price = 100 − implied monthly average fed funds rate.
+    Data: Yahoo Finance (CME futures) + FRED DFEDTARTU (current upper target rate).
+    """
+    try:
+        import yfinance as yf
+        hist = yf.Ticker("ZQ=F").history(period="3d", interval="1d")
+        if hist.empty:
+            return {}
+        price        = float(hist["Close"].iloc[-1])
+        implied_rate = 100.0 - price
+
+        current_rate = _fetch_fred_series("DFEDTARTU")
+        if current_rate is None:
+            current_rate = 4.50
+
+        diff = implied_rate - current_rate  # negative = market expects cut
+
+        probs: dict[str, float] = {k: 0.0 for k in _SC_LABELS}
+
+        if diff <= -0.375:
+            probs["Extreme Dovish Surprise"] = round(min(100, (abs(diff) - 0.25) / 0.25 * 100), 1)
+            probs["Dovish / Slight Miss"]    = round(max(0, 100 - probs["Extreme Dovish Surprise"]), 1)
+        elif diff <= -0.125:
+            probs["Dovish / Slight Miss"]  = round(min(100, abs(diff) / 0.25 * 100), 1)
+            probs["Consensus / In-Line"]   = round(max(0, 100 - probs["Dovish / Slight Miss"]), 1)
+        elif diff >= 0.375:
+            probs["Extreme Hawkish Surprise"] = round(min(100, (diff - 0.25) / 0.25 * 100), 1)
+            probs["Hawkish / Slight Beat"]    = round(max(0, 100 - probs["Extreme Hawkish Surprise"]), 1)
+        elif diff >= 0.125:
+            probs["Hawkish / Slight Beat"] = round(min(100, diff / 0.25 * 100), 1)
+            probs["Consensus / In-Line"]   = round(max(0, 100 - probs["Hawkish / Slight Beat"]), 1)
+        else:
+            p_hold = round(max(60.0, 100 - abs(diff) * 400), 1)
+            rem    = round(100 - p_hold, 1)
+            probs["Consensus / In-Line"]     = p_hold
+            probs["Dovish / Slight Miss"]    = round(rem * 0.6, 1)
+            probs["Hawkish / Slight Beat"]   = round(rem * 0.3, 1)
+            probs["Extreme Dovish Surprise"] = round(rem * 0.1, 1)
+
+        total = sum(probs.values())
+        if total > 0:
+            probs = {k: round(v / total * 100, 1) for k, v in probs.items()}
+
+        return {
+            **probs,
+            "_source": (
+                f"CME 30-Day Fed Funds Futures · "
+                f"Implied: {implied_rate:.3f}% · Target: {current_rate:.2f}%"
+            ),
+            "_implied_rate": round(implied_rate, 4),
+            "_current_rate": current_rate,
+        }
+    except Exception as exc:
+        return {"_error": str(exc)}
+
+
+def _get_event_probabilities(event_name: str, event_ccy: str) -> dict:
+    """
+    Dispatch to the appropriate probability source for this event type.
+    Returns {} when no real-time market data is available for this event.
+    """
+    n = event_name.lower()
+    is_fed = (
+        any(k in n for k in ("fomc", "federal reserve", "fed funds", "interest rate", "rate decision"))
+        and event_ccy in ("USD", "")
+    )
+    if is_fed:
+        return load_fomc_probabilities()
+    return {}
 
 
 @st.cache_data(ttl=10)
@@ -726,12 +898,25 @@ _SC_ROW_STYLES = [
 ]
 
 
-def _render_scenario_matrix(matrix: list[dict]) -> None:
-    """Render the 5-scenario matrix as a styled HTML table."""
+def _render_scenario_matrix(matrix: list[dict], probs: dict | None = None) -> None:
+    """Render the 5-scenario matrix with optional market-implied probability badges."""
+    _numeric_probs = {}
+    _max_label     = ""
+    if probs:
+        _numeric_probs = {k: v for k, v in probs.items()
+                          if not k.startswith("_") and isinstance(v, (int, float)) and v > 0}
+        if _numeric_probs:
+            _max_label = max(_numeric_probs, key=_numeric_probs.get)
+        if "_source" in probs:
+            st_html(
+                f'<div style="font-size:.57rem;color:#334155;margin-bottom:7px;line-height:1.5;">'
+                f'&#9432;&nbsp;Probabilities — {probs["_source"]}</div>'
+            )
+
     hdr = (
         '<table class="sc-tbl">'
         "<thead><tr>"
-        '<th style="width:16%;">Scenario</th>'
+        '<th style="width:18%;">Scenario</th>'
         '<th style="width:20%;">Trigger Condition</th>'
         '<th style="width:24%;">Market Reaction</th>'
         '<th>Expert Rationale</th>'
@@ -739,11 +924,23 @@ def _render_scenario_matrix(matrix: list[dict]) -> None:
     )
     rows = ""
     for i, sc in enumerate(matrix[:5]):
-        sty = _SC_ROW_STYLES[i]   # 'sty' — never shadows the streamlit 'st' module
+        sty   = _SC_ROW_STYLES[i]
+        label = sc.get("label", "")
+        prob  = _numeric_probs.get(label)
+        is_top = label == _max_label and prob is not None
+        row_bg = "background:rgba(59,130,246,.05);" if is_top else ""
+        prob_html = ""
+        if prob is not None:
+            p_col = "#22c55e" if prob >= 50 else ("#f59e0b" if prob >= 25 else "#475569")
+            star  = " ★" if is_top else ""
+            prob_html = (
+                f'<span style="font-size:.62rem;font-weight:700;color:{p_col};'
+                f'margin-left:6px;white-space:nowrap;">{prob:.0f}%{star}</span>'
+            )
         rows += (
-            f'<tr style="border-left:3px solid {sty["border"]};">'
+            f'<tr style="border-left:3px solid {sty["border"]};{row_bg}">'
             f'<td class="sc-cell-label" style="color:{sty["text"]};">'
-            f'{sty["arrow"]}&nbsp;{sc.get("label","")}</td>'
+            f'{sty["arrow"]}&nbsp;{label}{prob_html}</td>'
             f'<td class="sc-cell-trigger">{sc.get("trigger","")}</td>'
             f'<td class="sc-cell-reaction">{sc.get("market_reaction", sc.get("reaction",""))}</td>'
             f'<td class="sc-cell-rationale">{sc.get("rationale","")}</td>'
@@ -812,6 +1009,18 @@ def _render_event_terminal(ev: dict) -> None:
     )
 
     _matrix = _scenario_matrix(ev_name, ev_ccy)
+    _probs  = _get_event_probabilities(ev_name, ev_ccy)
+    _np     = {k: v for k, v in _probs.items()
+               if not k.startswith("_") and isinstance(v, (int, float)) and v > 0}
+    _top_label = max(_np, key=_np.get) if _np else ""
+
+    if _probs.get("_source"):
+        st.markdown(
+            f'<div style="font-size:.57rem;color:#334155;margin-bottom:4px;">'
+            f'&#9432;&nbsp;Probabilities — {_probs["_source"]}</div>',
+            unsafe_allow_html=True,
+        )
+
     _sc_tabs = st.tabs([
         "▲▲ Extreme Hawkish",
         "▲ Hawkish",
@@ -823,14 +1032,25 @@ def _render_event_terminal(ev: dict) -> None:
 
     for _i, (_sc_tab, _sc) in enumerate(zip(_sc_tabs[:5], _matrix[:5])):
         with _sc_tab:
-            _sty = _SC_ROW_STYLES[_i]
+            _sty   = _SC_ROW_STYLES[_i]
+            _label = _sc.get("label", "")
+            _prob  = _np.get(_label)
+            _is_top = _label == _top_label and _prob is not None
+            _prob_badge = ""
+            if _prob is not None:
+                _pc = "#22c55e" if _prob >= 50 else ("#f59e0b" if _prob >= 25 else "#475569")
+                _prob_badge = (
+                    f'<span style="font-size:.7rem;font-weight:700;color:{_pc};margin-left:10px;">'
+                    f'{_prob:.0f}%{"  ★ MOST LIKELY" if _is_top else ""}</span>'
+                )
+            _border_extra = "box-shadow:0 0 0 1px #3b82f6;" if _is_top else ""
             st.markdown(
                 f'<div style="background:#0d1117;border:1px solid #1e293b;'
                 f'border-left:4px solid {_sty["border"]};border-radius:6px;'
-                f'padding:22px 26px;margin-top:10px;">'
+                f'padding:22px 26px;margin-top:10px;{_border_extra}">'
                 f'<div style="font-size:.62rem;font-weight:700;letter-spacing:.1em;'
                 f'text-transform:uppercase;color:{_sty["text"]};margin-bottom:16px;">'
-                f'{_sty["arrow"]} {_sc.get("label","")}</div>'
+                f'{_sty["arrow"]} {_label}{_prob_badge}</div>'
                 f'<div style="margin-bottom:16px;">'
                 f'<div style="font-size:.53rem;font-weight:700;letter-spacing:.12em;'
                 f'text-transform:uppercase;color:#334155;margin-bottom:6px;">TRIGGER CONDITION</div>'
@@ -855,7 +1075,7 @@ def _render_event_terminal(ev: dict) -> None:
 
     with _sc_tabs[5]:
         st.markdown('<div style="margin-top:10px;"></div>', unsafe_allow_html=True)
-        _render_scenario_matrix(_matrix)
+        _render_scenario_matrix(_matrix, _probs if _np else None)
 
 
 def st_html(html: str) -> None:
@@ -1094,8 +1314,20 @@ filtered_events: list[dict] = [
 ]
 
 # ══════════════════════════════════════════════════════════════════════════════
-# MAIN — Tabs
+# MAIN — Brand header + routing
 # ══════════════════════════════════════════════════════════════════════════════
+
+_hdr_col, _ = st.columns([2, 5])
+with _hdr_col:
+    st.markdown(
+        '<div style="padding:6px 0 14px;">'
+        '<span style="font-size:1.35rem;font-weight:900;letter-spacing:.2em;color:#3b82f6;">TREM</span>'
+        '<span style="font-size:1.35rem;font-weight:900;letter-spacing:.2em;color:#f1f5f9;"> NEWS</span>'
+        '<div style="font-size:.5rem;color:#334155;letter-spacing:.1em;text-transform:uppercase;'
+        'margin-top:2px;">Financial Intelligence Terminal</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
 if st.session_state.get("event_page") is not None:
     _render_event_terminal(st.session_state.event_page)
@@ -1109,10 +1341,12 @@ tab_cal, tab_ai, tab_export = st.tabs(
 
 with tab_cal:
     _src_colors = {
-        "LIVE — Finnhub API":   "#22c55e",
-        "LOCAL DB":             "#3b82f6",
-        "GENERATED SCHEDULE":   "#f59e0b",
-        "NO DATA":              "#ef4444",
+        "LIVE — Finnhub API":       "#22c55e",
+        "LIVE — ForexFactory":      "#22c55e",
+        "LIVE — Trading Economics": "#22c55e",
+        "LOCAL DB":                  "#3b82f6",
+        "GENERATED SCHEDULE":        "#f59e0b",
+        "NO DATA":                   "#ef4444",
     }
     _src_c = _src_colors.get(_data_source, "#475569")
 
