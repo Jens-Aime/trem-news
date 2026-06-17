@@ -32,9 +32,17 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Kill any process already bound to port 8501 to avoid "address in use" errors.
+if command -v fuser >/dev/null 2>&1; then
+    fuser -k 8501/tcp 2>/dev/null || true
+elif command -v lsof >/dev/null 2>&1; then
+    lsof -ti tcp:8501 | xargs -r kill -9 2>/dev/null || true
+fi
+
 echo ""
 echo "  Market Pulse Intelligence — starting dashboard"
 echo "  Port   : 8501"
+echo "  Python : $(python3 --version 2>&1)"
 echo "  Config : $(pwd)/.streamlit/config.toml"
 echo ""
 

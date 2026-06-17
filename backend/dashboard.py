@@ -7,6 +7,7 @@ Start command:
     cd /path/to/trem-news/backend
     streamlit run dashboard.py --server.port 8501
 """
+from __future__ import annotations
 
 import sqlite3
 import sys
