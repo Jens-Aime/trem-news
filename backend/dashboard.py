@@ -318,17 +318,30 @@ def load_events(from_d: date, to_d: date) -> tuple[list[dict], str]:
         except Exception:
             pass
 
-    # ── 2. ForexFactory CDN (free, no key, current week) ──────────────────────
-    try:
-        r = httpx.get(FF_CALENDAR, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
-        r.raise_for_status()
-        ff_raw = r.json()
-        if ff_raw:
-            ff_events = _normalize_forexfactory(ff_raw, from_d, to_d)
-            if ff_events:
-                return ff_events, "LIVE — ForexFactory"
-    except Exception:
-        pass
+    # ── 2. ForexFactory CDN (free, no key — this + next + last week) ────────────
+    _ff_events: list[dict] = []
+    for _ff_url in [
+        "https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.json",
+        "https://cdn-nfs.faireconomy.media/ff_calendar_nextweek.json",
+        "https://cdn-nfs.faireconomy.media/ff_calendar_lastweek.json",
+    ]:
+        try:
+            r = httpx.get(_ff_url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            _raw = r.json()
+            if _raw:
+                _ff_events.extend(_normalize_forexfactory(_raw, from_d, to_d))
+        except Exception:
+            pass
+    if _ff_events:
+        _seen_ids: set[str] = set()
+        _ff_dedup: list[dict] = []
+        for _fe in sorted(_ff_events, key=lambda e: e["timestamp"]):
+            if _fe["event_id"] not in _seen_ids:
+                _seen_ids.add(_fe["event_id"])
+                _ff_dedup.append(_fe)
+        if _ff_dedup:
+            return _ff_dedup, "LIVE — ForexFactory"
 
     # ── 3. Trading Economics (optional key) ───────────────────────────────────
     if TRADING_ECONOMICS_KEY:
@@ -1089,7 +1102,7 @@ if "last_alert_ts" not in st.session_state:
 if "event_page" not in st.session_state:
     st.session_state.event_page = None
 
-_ALL_CCYS = sorted(["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "NZD", "CNY"])
+_ALL_CCYS = sorted(set(["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "NZD", "CNY"]))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SIDEBAR — Volatility status + interactive filters
