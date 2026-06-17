@@ -1,10 +1,24 @@
 [theme]
-base                  = "dark"
-backgroundColor       = "#0b0f19"
+base                     = "dark"
+backgroundColor          = "#0b0f19"
 secondaryBackgroundColor = "#111827"
-textColor             = "#cbd5e1"
-primaryColor          = "#3b82f6"
-font                  = "sans serif"
+textColor                = "#cbd5e1"
+primaryColor             = "#3b82f6"
+font                     = "sans serif"
 
 [server]
-headless = true
+# Required for GitHub Codespaces (and any reverse-proxy setup).
+#
+# Without enableXsrfProtection = false:
+#   Streamlit validates the Origin header and rejects requests that arrive
+#   from the Codespaces proxy domain (*.app.github.dev ≠ localhost), causing
+#   the browser to receive a silent 404.
+#
+# Without enableCORS = false:
+#   The browser's CORS pre-flight fails because the proxy rewrites the host,
+#   preventing WebSocket upgrade and page load.
+headless              = true
+address               = "0.0.0.0"
+port                  = 8501
+enableCORS            = false
+enableXsrfProtection  = false
