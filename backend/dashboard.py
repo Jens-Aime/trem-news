@@ -1,5 +1,5 @@
 """
-Market Pulse Intelligence — Financial Calendar Dashboard
+Trem News — Financial Calendar Dashboard
 =========================================================
 Professional economic calendar with live volatility monitoring.
 
@@ -27,7 +27,7 @@ if str(_BACKEND) not in sys.path:
 # ── Page config ───────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Market Pulse Intelligence",
+    page_title="Trem News",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -261,6 +261,21 @@ def _fmt(v: float | None, unit: str | None = None) -> str:
     if av >= 1_000:
         return f"{v:,.1f}K"
     return f"{v:.2f}"
+
+
+def _fmt_price(v: float | None) -> str:
+    if v is None:
+        return "N/A"
+    av = abs(v)
+    if av >= 10_000:
+        return f"{v:,.0f}"
+    if av >= 1_000:
+        return f"{v:,.2f}"
+    if av >= 100:
+        return f"{v:.4f}"
+    if av >= 1:
+        return f"{v:.5f}"
+    return f"{v:.6f}"
 
 
 def _impact_html(level: str) -> str:
@@ -737,6 +752,112 @@ def _render_scenario_matrix(matrix: list[dict]) -> None:
     st_html(hdr + rows + "</tbody></table>")
 
 
+def _render_event_terminal(ev: dict) -> None:
+    """Institutional-style scenario terminal for a single calendar event."""
+    if st.button("← Back to Calendar", key="terminal_back"):
+        st.session_state.event_page = None
+        st.rerun()
+
+    ev_name   = ev.get("event_name", "")
+    ev_ccy    = ev.get("currency", "USD")
+    ev_impact = ev.get("impact_level", "low")
+    ev_time   = _parse_time(str(ev.get("timestamp", "")))
+    ev_date   = _parse_date(str(ev.get("timestamp", "")))
+    ev_actual = ev.get("actual")
+    ev_fcast  = ev.get("forecast")
+    ev_prev   = ev.get("previous")
+    ev_unit   = ev.get("unit") or ""
+
+    _impact_color = {"high": "#ef4444", "medium": "#f59e0b"}.get(ev_impact, "#4b5563")
+    _status   = "RELEASED" if ev_actual is not None else "SCHEDULED"
+    _status_c = "#334155" if ev_actual is not None else "#3b82f6"
+
+    st.markdown(
+        f'<div style="background:#111827;border:1px solid #1e293b;border-left:4px solid {_impact_color};'
+        f'border-radius:6px;padding:16px 20px;margin:8px 0 16px;">'
+        f'<div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px;">'
+        f'<div>'
+        f'<div style="font-size:.55rem;color:#334155;letter-spacing:.14em;text-transform:uppercase;margin-bottom:5px;">'
+        f'SCENARIO TERMINAL &nbsp;&middot;&nbsp; {ev_date}</div>'
+        f'<div style="font-size:1.25rem;font-weight:700;color:#f1f5f9;letter-spacing:.01em;">{ev_name}</div>'
+        f'</div>'
+        f'<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding-top:2px;">'
+        f'<span style="font-size:.72rem;font-weight:700;color:{_impact_color};letter-spacing:.08em;">'
+        f'&#9632; {ev_impact.upper()} IMPACT</span>'
+        f'<span style="font-size:.72rem;color:#475569;font-family:monospace;font-weight:700;">{ev_ccy}</span>'
+        f'<span style="font-size:.7rem;color:#334155;font-family:monospace;">{ev_time} UTC</span>'
+        f'<span style="font-size:.68rem;font-weight:700;color:{_status_c};letter-spacing:.06em;">{_status}</span>'
+        f'</div>'
+        f'</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    _dc1, _dc2, _dc3 = st.columns(3)
+    with _dc1:
+        _act_v = f"{ev_actual:g}" if ev_actual is not None else "Pending"
+        st.metric("Actual", _act_v)
+    with _dc2:
+        _fct_v = f"{ev_fcast:g}" if ev_fcast is not None else "—"
+        st.metric("Forecast", _fct_v)
+    with _dc3:
+        _prv_v = f"{ev_prev:g}" if ev_prev is not None else "—"
+        st.metric("Previous", _prv_v)
+
+    st.markdown(
+        '<div style="margin:18px 0 6px;font-size:.58rem;font-weight:700;letter-spacing:.14em;'
+        'text-transform:uppercase;color:#334155;border-bottom:1px solid #1e293b;padding-bottom:6px;">'
+        'SCENARIO ANALYSIS</div>',
+        unsafe_allow_html=True,
+    )
+
+    _matrix = _scenario_matrix(ev_name, ev_ccy)
+    _sc_tabs = st.tabs([
+        "▲▲ Extreme Hawkish",
+        "▲ Hawkish",
+        "→ Consensus",
+        "▼ Dovish",
+        "▼▼ Extreme Dovish",
+        "≡ Full Table",
+    ])
+
+    for _i, (_sc_tab, _sc) in enumerate(zip(_sc_tabs[:5], _matrix[:5])):
+        with _sc_tab:
+            _sty = _SC_ROW_STYLES[_i]
+            st.markdown(
+                f'<div style="background:#0d1117;border:1px solid #1e293b;'
+                f'border-left:4px solid {_sty["border"]};border-radius:6px;'
+                f'padding:22px 26px;margin-top:10px;">'
+                f'<div style="font-size:.62rem;font-weight:700;letter-spacing:.1em;'
+                f'text-transform:uppercase;color:{_sty["text"]};margin-bottom:16px;">'
+                f'{_sty["arrow"]} {_sc.get("label","")}</div>'
+                f'<div style="margin-bottom:16px;">'
+                f'<div style="font-size:.53rem;font-weight:700;letter-spacing:.12em;'
+                f'text-transform:uppercase;color:#334155;margin-bottom:6px;">TRIGGER CONDITION</div>'
+                f'<div style="font-size:.82rem;color:#94a3b8;line-height:1.7;">'
+                f'{_sc.get("trigger","")}</div>'
+                f'</div>'
+                f'<div style="margin-bottom:16px;">'
+                f'<div style="font-size:.53rem;font-weight:700;letter-spacing:.12em;'
+                f'text-transform:uppercase;color:#334155;margin-bottom:6px;">MARKET REACTION</div>'
+                f'<div style="font-size:.82rem;color:#cbd5e1;font-weight:500;line-height:1.7;">'
+                f'{_sc.get("market_reaction", _sc.get("reaction",""))}</div>'
+                f'</div>'
+                f'<div>'
+                f'<div style="font-size:.53rem;font-weight:700;letter-spacing:.12em;'
+                f'text-transform:uppercase;color:#334155;margin-bottom:6px;">EXPERT RATIONALE</div>'
+                f'<div style="font-size:.78rem;color:#64748b;line-height:1.75;">'
+                f'{_sc.get("rationale","")}</div>'
+                f'</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    with _sc_tabs[5]:
+        st.markdown('<div style="margin-top:10px;"></div>', unsafe_allow_html=True)
+        _render_scenario_matrix(_matrix)
+
+
 def st_html(html: str) -> None:
     st.markdown(html, unsafe_allow_html=True)
 
@@ -745,6 +866,8 @@ def st_html(html: str) -> None:
 
 if "last_alert_ts" not in st.session_state:
     st.session_state.last_alert_ts = None
+if "event_page" not in st.session_state:
+    st.session_state.event_page = None
 
 _ALL_CCYS = sorted(["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "NZD", "CNY"])
 
@@ -753,7 +876,7 @@ _ALL_CCYS = sorted(["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "NZD", "CNY
 # ══════════════════════════════════════════════════════════════════════════════
 
 with st.sidebar:
-    st.markdown("**MARKET PULSE INTELLIGENCE**")
+    st.markdown("**TREM NEWS**")
     st.caption("Decision Support System")
     st.divider()
 
@@ -974,6 +1097,10 @@ filtered_events: list[dict] = [
 # MAIN — Tabs
 # ══════════════════════════════════════════════════════════════════════════════
 
+if st.session_state.get("event_page") is not None:
+    _render_event_terminal(st.session_state.event_page)
+    st.stop()
+
 tab_cal, tab_ai, tab_export = st.tabs(
     ["Economic Calendar", "Asset Intelligence", "Export"]
 )
@@ -1056,10 +1183,13 @@ with tab_cal:
                 )
 
                 if ev.get("impact_level") in ("high", "medium"):
-                    with st.expander(f"Scenario Analysis — {ev.get('event_name', '')}"):
-                        _render_scenario_matrix(
-                            _scenario_matrix(ev.get("event_name", ""), ev.get("currency", "USD"))
-                        )
+                    if st.button(
+                        "→ Scenario Terminal",
+                        key=f"evt_{ev.get('event_id', '')}_{ev.get('timestamp', '')}",
+                        help=f"Open scenario terminal for {ev.get('event_name', '')}",
+                    ):
+                        st.session_state.event_page = ev
+                        st.rerun()
 
 # ── Tab 2: Asset Intelligence ─────────────────────────────────────────────────
 
@@ -1107,7 +1237,7 @@ with tab_ai:
             with mc1:
                 st.metric(
                     "Current Price",
-                    f"{_price:.5g}" if _price is not None else "N/A",
+                    _fmt_price(_price),
                 )
             with mc2:
                 st.metric(
@@ -1116,9 +1246,9 @@ with tab_ai:
                     delta=f"{_chg_pct:+.2f}%" if _chg_pct is not None else None,
                 )
             with mc3:
-                st.metric("52W High", f"{_hi52:.5g}" if _hi52 is not None else "N/A")
+                st.metric("52W High", _fmt_price(_hi52))
             with mc4:
-                st.metric("52W Low",  f"{_lo52:.5g}" if _lo52 is not None else "N/A")
+                st.metric("52W Low",  _fmt_price(_lo52))
 
             # 52-week range progress bar
             if _price is not None and _hi52 is not None and _lo52 is not None and _hi52 > _lo52:
@@ -1136,9 +1266,9 @@ with tab_ai:
                     f'</div>'
                     f'<div style="display:flex;justify-content:space-between;'
                     f'font-size:.62rem;color:#475569;margin-top:5px;">'
-                    f'<span>{_lo52:.5g} (Low)</span>'
+                    f'<span>{_fmt_price(_lo52)} (Low)</span>'
                     f'<span style="color:#3b82f6;">{_pct_pos:.0f}% of range</span>'
-                    f'<span>{_hi52:.5g} (High)</span>'
+                    f'<span>{_fmt_price(_hi52)} (High)</span>'
                     f'</div></div>',
                     unsafe_allow_html=True,
                 )
@@ -1189,7 +1319,7 @@ with tab_ai:
                             f'<div style="font-size:.55rem;color:#334155;letter-spacing:.1em;'
                             f'text-transform:uppercase;margin-bottom:6px;">Price Target (Mean)</div>'
                             f'<div style="font-size:1.15rem;font-weight:700;color:#cbd5e1;">'
-                            f'{_target_mean:.4g}</div>'
+                            f'{_fmt_price(_target_mean)}</div>'
                             f'<div style="font-size:.62rem;color:{_up_col};margin-top:4px;">'
                             f'{_up_str.strip()}</div>'
                             f'</div>',
@@ -1204,9 +1334,9 @@ with tab_ai:
                             f'<div style="font-size:.55rem;color:#334155;letter-spacing:.1em;'
                             f'text-transform:uppercase;margin-bottom:6px;">Target Range</div>'
                             f'<div style="font-size:.9rem;font-weight:600;">'
-                            f'<span style="color:#22c55e">{_thi:.4g if _thi else "—"}</span>'
+                            f'<span style="color:#22c55e">{_fmt_price(_thi) if _thi else "—"}</span>'
                             f'<span style="color:#334155;margin:0 5px;">/</span>'
-                            f'<span style="color:#ef4444">{_tlo:.4g if _tlo else "—"}</span>'
+                            f'<span style="color:#ef4444">{_fmt_price(_tlo) if _tlo else "—"}</span>'
                             f'</div>'
                             f'<div style="font-size:.58rem;color:#334155;margin-top:5px;">High / Low</div>'
                             f'</div>',
@@ -1299,7 +1429,7 @@ with tab_export:
             st.download_button(
                 label="Download Events (CSV)",
                 data=_ev_df.to_csv(index=False),
-                file_name=f"market_pulse_events_{from_d}_{to_d}.csv",
+                file_name=f"trem_news_events_{from_d}_{to_d}.csv",
                 mime="text/csv",
                 use_container_width=True,
             )
@@ -1323,7 +1453,7 @@ with tab_export:
             st.download_button(
                 label="Download Alerts (CSV)",
                 data=_al_export.to_csv(index=False),
-                file_name="market_pulse_alerts.csv",
+                file_name="trem_news_alerts.csv",
                 mime="text/csv",
                 use_container_width=True,
             )
@@ -1348,7 +1478,7 @@ with tab_export:
 st.divider()
 st.markdown(
     f'<div style="font-size:.58rem;color:#1e293b;letter-spacing:.06em;text-align:center;">'
-    f'MARKET PULSE INTELLIGENCE &nbsp;&bull;&nbsp; DECISION SUPPORT SYSTEM &nbsp;&bull;&nbsp; '
+    f'TREM NEWS &nbsp;&bull;&nbsp; DECISION SUPPORT SYSTEM &nbsp;&bull;&nbsp; '
     f'NOT INVESTMENT ADVICE &nbsp;&bull;&nbsp; DATA: FINNHUB + YFINANCE &nbsp;&bull;&nbsp; '
     f'DB: {DB_PATH.name}'
     f'</div>',
