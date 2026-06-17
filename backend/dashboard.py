@@ -723,11 +723,11 @@ def _render_scenario_matrix(matrix: list[dict]) -> None:
     )
     rows = ""
     for i, sc in enumerate(matrix[:5]):
-        st = _SC_ROW_STYLES[i]
+        sty = _SC_ROW_STYLES[i]   # 'sty' — never shadows the streamlit 'st' module
         rows += (
-            f'<tr style="border-left:3px solid {st["border"]};">'
-            f'<td class="sc-cell-label" style="color:{st["text"]};">'
-            f'{st["arrow"]}&nbsp;{sc.get("label","")}</td>'
+            f'<tr style="border-left:3px solid {sty["border"]};">'
+            f'<td class="sc-cell-label" style="color:{sty["text"]};">'
+            f'{sty["arrow"]}&nbsp;{sc.get("label","")}</td>'
             f'<td class="sc-cell-trigger">{sc.get("trigger","")}</td>'
             f'<td class="sc-cell-reaction">{sc.get("market_reaction", sc.get("reaction",""))}</td>'
             f'<td class="sc-cell-rationale">{sc.get("rationale","")}</td>'

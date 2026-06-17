@@ -1,19 +1,47 @@
 #!/usr/bin/env bash
 # start_dashboard.sh — launch the Market Pulse Intelligence Streamlit dashboard.
 #
-# Usage (from the trem-news/backend directory):
-#   bash start_dashboard.sh
+# Usage (from any directory):
+#   bash /path/to/trem-news/backend/start_dashboard.sh
 #
-# The required server flags are already set in .streamlit/config.toml.
-# This script just ensures you're in the right directory before starting.
+# All critical server flags are passed explicitly so the script works
+# regardless of whether .streamlit/config.toml is found, and regardless
+# of which Python / virtual-environment is active.
+#
+# Why these flags are required in GitHub Codespaces
+# ──────────────────────────────────────────────────
+# --server.address=0.0.0.0
+#     Bind to all interfaces so the Codespaces container network can
+#     reach the process (default 'localhost' is unreachable externally).
+#
+# --server.enableCORS=false
+#     Disable Streamlit's same-origin CORS guard so the Codespaces proxy
+#     (which rewrites the Host header) can forward requests successfully.
+#
+# --server.enableXsrfProtection=false
+#     Disable XSRF token validation.  Streamlit validates the Origin
+#     header; Codespaces sends requests from *.app.github.dev ≠ localhost,
+#     so every request would be silently rejected → HTTP 502.
+#
+# --server.headless=true
+#     Suppress the "open browser" prompt and allow the process to start
+#     without a display server.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "Starting Market Pulse Intelligence dashboard on port 8501..."
-echo "In GitHub Codespaces: open the PORTS tab and click the 8501 forwarded address."
+echo ""
+echo "  Market Pulse Intelligence — starting dashboard"
+echo "  Port   : 8501"
+echo "  Config : $(pwd)/.streamlit/config.toml"
 echo ""
 
-exec streamlit run dashboard.py
+exec streamlit run dashboard.py \
+    --server.address=0.0.0.0 \
+    --server.port=8501 \
+    --server.headless=true \
+    --server.enableCORS=false \
+    --server.enableXsrfProtection=false \
+    --browser.gatherUsageStats=false
